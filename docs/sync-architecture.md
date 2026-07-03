@@ -279,25 +279,36 @@ SELECT SellID, COUNT(DISTINCT SellBranch) b FROM itec GROUP BY SellID HAVING b>1
 
 ---
 
-## 12. Phases (ยังไม่ลงมือ)
+## 12. Phases
 
-| Phase | งาน |
-|---|---|
-| **P0** | เคาะ open questions ข้อ 2,4,5,6 + **verify PK uniqueness บน mock** (§11.1) + verify "record_ids เรียงตาม input" + ทดสอบ Lark write throughput จริงบน mock 100M (หา ETA จริง) |
-| **P1** | Provisioning API (สร้าง 270+10 table + fields, idempotent) + `deriveKey()` + MySQL schema §6 |
-| **P2** | Backfill engine (pointer reserve / mapping / resume / batch / job_queue) |
-| **P3** | today 15-min sync + `POST /daily/clear` |
-| **P4** | itec incremental (midnight) + midnight state machine (§10) |
-| **P5** | Reconciliation L1–L3 + auto-heal + status report |
-| **P6** | Backup/PITR + runbook (recover mapping / rebuild ปี) |
+| Phase | งาน | สถานะ |
+|---|---|---|
+| **P0** | เคาะ open questions + verify PK uniqueness on mock + verify "record_ids เรียงตาม input" + Lark write throughput จริง | ✅ **เสร็จ** — ผล §3.1 |
+| **P1 — Lark setup** | `POST /base/init` (provision 250 partition table + 41 field, idempotent+resumable) + `POST /base/remove-partitions` (+`dryRun`) + `GET /base/status` + MySQL write-through (`sync_year`/`sync_partition`) + MySQL schema §6 | ✅ **เสร็จ** (2026-07-03) — 250 partition/base (ไม่ใช่ 270, daily แยก base ต่างหาก — พักไว้คุยทีหลัง) |
+| **P2** | Backfill engine (`deriveKey()`, pointer reserve, mapping, resume, batch, `job_queue`) | ⏳ ถัดไป — รอ mock Com7 DB เสร็จ |
+| **P3** | today 15-min sync + `POST /daily/clear` | ⏳ |
+| **P4** | itec incremental (midnight) + midnight state machine (§10) | ⏳ |
+| **P5** | Reconciliation L1–L3 + auto-heal + status report | ⏳ |
+| **P6** | Backup/PITR + runbook (recover mapping / rebuild ปี) | ⏳ |
+
+### 12.1 P1 (Lark setup) — สิ่งที่ได้จริง
+
+- **Endpoints:** `POST /base/init`, `POST /base/remove-partitions` (+`?dryRun=true`), `GET /base/status?year=N` — auth ผ่าน header (`X-Lark-App-Id`/`X-Lark-App-Secret`) ทุก route
+- **MySQL instance B ใช้งานจริงแล้ว:** local MySQL 8.0 (Homebrew), user `sync` (least privilege), schema 5 ตารางตาม §6 (`today_mapping`/daily ยังไม่สร้าง — พักไว้), migration ผ่าน `.sql` files + `npm run migrate` (idempotent)
+- **`sync_partition` write-through:** `/base/init` เขียน `partition_no → lark_table_id` ทุกตัวที่เจอบน Lark (ทั้งสร้างใหม่+ของเดิม) ในคำสั่งเดียว หลังลูป Lark เสร็จ — self-healing สำหรับ base ที่ provision ไปก่อนมี write-through; **bound เฉพาะช่วง `1..partitionCount`** (แก้บั๊กที่เจอจาก live test: table `itec_NNN` นอกช่วงไม่ควรถูกนับ)
+- **`/base/status` อ่าน MySQL ล้วน ไม่ยิง Lark** — เร็ว/ถูก ตรงกับเป้าหมายที่ตั้งไว้ตอน discuss gap
+- **Bug จริงที่เจอจาก live-test (แก้แล้ว):**
+  1. `list-fields` (base/v3) cap ที่ 20 ไม่มี pagination → เปลี่ยนดีไซน์เป็น "table มีอยู่ = สมบูรณ์" (ไม่เช็ค field รายตัว, พึ่ง atomicity ของ createTable แทน)
+  2. `list-tables` (base/v3) cap ที่ 20 ไม่มี pagination → เปลี่ยนไปใช้ `bitable/v1` แทน (ยืนยัน enumerate ได้ครบ + paginate จริง)
+- **ยังไม่ทำ (deferred, ไม่ block P2):** daily base provisioning (พักไว้คุยว่าจำเป็นไหม), field-schema drift detection บน table เดิม (ยอมรับความเสี่ยง — ต้อง freeze field schema ก่อน provision จริง)
 
 ---
 
 ## 13. Tech stack / ทุนที่มีแล้ว
 
-- **Scaffold:** Node.js + Express (clean architecture) — ดู [README.md](../README.md)
-  - Express = control plane · **MySQL (instance B)** = mapping + pointer + state + queue
-  - ⚠️ scaffold ปัจจุบันเป็น User CRUD + Redis — ต้องเปลี่ยน repository layer เป็น MySQL และถอด Redis ออก
-- **lark skills** (`lark-base` ฯลฯ) ในเครื่อง — ช่วย provision/สำรวจ base ตอน dev
-- **Mock DB 100M** — วัด throughput จริง + verify PK uniqueness ก่อน commit ตัวเลข
-- **MySQL 8.0** — ใช้ `FOR UPDATE SKIP LOCKED` (queue) + `PARTITION BY LIST` (mapping) + `LAST_INSERT_ID` trick (pointer)
+- **Node.js + Express (clean architecture)** — ดู [README.md](../README.md); domain/application/infrastructure แยกชัด, ports (`LarkGateway`, `YearRepository`, ฯลฯ) + adapters
+- **Lark:** `LarkGatewayHttp` (base/v3 + `bitable/v1` สำหรับ list-tables) — auth ผ่าน header ต่อ request, token cache keyed by `app_id`
+- **MySQL instance B (ops store) — ใช้งานจริงแล้ว:** local MySQL 8.0 (Homebrew), user `sync` (least privilege) บน `sync_ops`; schema §6 (`sync_year`, `sync_partition`, `sync_mapping`, `sync_state`, `job_queue`) ผ่าน migration (`npm run migrate`)
+- **MySQL instance A (Com7 source):** ยังไม่ผูก — รอ mock DB (`10.2.50.79`) เสร็จ, แยก track จาก ops store
+- **lark skills** (`lark-base` ฯลฯ) ในเครื่อง — ใช้ตรวจ/probe base ตอน dev
+- **Test:** `node --test`, TDD ทุก use-case + live verification จริงบน Lark test base ก่อน merge ทุกครั้ง
