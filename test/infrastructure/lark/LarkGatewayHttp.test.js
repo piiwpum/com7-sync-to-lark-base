@@ -48,3 +48,18 @@ test('listFields returns field names from data.fields', async () => {
   const g = gw(stub(() => ({ code: 0, data: { fields: [{ name: 'A' }, { name: 'B' }], has_more: false } })));
   assert.deepEqual(await g.listFields('B', 't1'), ['A', 'B']);
 });
+
+test('deleteTable issues a DELETE with no body', async () => {
+  let seenMethod, seenBody;
+  const g = gw(stub((_url, opts) => { seenMethod = opts.method; seenBody = opts.body; return { code: 0 }; }));
+  await g.deleteTable('B', 't1');
+  assert.equal(seenMethod, 'DELETE');
+  assert.equal(seenBody, undefined);
+});
+
+test('deleteTable retries on rate-limit code then succeeds', async () => {
+  let n = 0;
+  const g = gw(stub(() => (n++ === 0 ? { code: 1254291, msg: 'concurrent' } : { code: 0 })));
+  await g.deleteTable('B', 't1'); // does not throw
+  assert.equal(n, 2);
+});

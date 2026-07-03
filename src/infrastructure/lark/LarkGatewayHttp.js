@@ -23,9 +23,9 @@ export function createLarkGateway({ token, baseDomain, fetchFn = fetch, sleepFn 
     return e;
   };
 
-  const writeCall = async (path, body, label) => {
+  const writeCall = async (path, { method = 'POST', body } = {}, label) => {
     for (let attempt = 0; ; attempt++) {
-      const b = await call(path, { method: 'POST', body: JSON.stringify(body) });
+      const b = await call(path, { method, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
       if (b.code === 0) return b;
       if (RATE_LIMIT_CODES.has(b.code) && attempt < maxRetries) {
         await sleepFn(500 * (attempt + 1));
@@ -59,8 +59,12 @@ export function createLarkGateway({ token, baseDomain, fetchFn = fetch, sleepFn 
   }
 
   async function createTable(baseId, name, fields) {
-    const b = await writeCall(`/open-apis/base/v3/bases/${baseId}/tables`, { name, fields }, 'createTable');
+    const b = await writeCall(`/open-apis/base/v3/bases/${baseId}/tables`, { body: { name, fields } }, 'createTable');
     return b.data.id;
+  }
+
+  async function deleteTable(baseId, tableId) {
+    await writeCall(`/open-apis/base/v3/bases/${baseId}/tables/${tableId}`, { method: 'DELETE' }, 'deleteTable');
   }
 
   async function listFields(baseId, tableId) {
@@ -77,8 +81,8 @@ export function createLarkGateway({ token, baseDomain, fetchFn = fetch, sleepFn 
   }
 
   async function createField(baseId, tableId, field) {
-    await writeCall(`/open-apis/base/v3/bases/${baseId}/tables/${tableId}/fields`, field, 'createField');
+    await writeCall(`/open-apis/base/v3/bases/${baseId}/tables/${tableId}/fields`, { body: field }, 'createField');
   }
 
-  return { getBase, listTables, createTable, listFields, createField };
+  return { getBase, listTables, createTable, deleteTable, listFields, createField };
 }

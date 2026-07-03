@@ -7,5 +7,6 @@ import { Router } from 'express';
 export function baseRoutes({ larkAuth, baseController }) {
   const router = Router();
   router.post('/init', larkAuth, baseController.init);
+  router.post('/remove-partitions', larkAuth, baseController.removePartitions);
   return router;
 }

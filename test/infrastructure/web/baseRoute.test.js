@@ -20,12 +20,20 @@ function request(app, { method, path, headers, body }) {
 }
 
 const passAuth = (req, _res, next) => { req.larkGateway = {}; next(); };
-const fakeUseCase = {
+const fakeProvision = {
   async execute({ year, base }) {
     return { year, base, total: 250, existing: 0, created: 250, remaining: 0, done: true };
   },
 };
-const appWith = () => createApp({ larkAuth: passAuth, baseController: new BaseController({ provisionYearBase: fakeUseCase }) });
+const fakeRemove = {
+  async execute({ year, base }) {
+    return { year, base, total: 250, deleted: 250, remaining: 0, done: true };
+  },
+};
+const appWith = () => createApp({
+  larkAuth: passAuth,
+  baseController: new BaseController({ provisionYearBase: fakeProvision, removeAllPartitions: fakeRemove }),
+});
 
 test('400 when year missing', async () => {
   const r = await request(appWith(), { method: 'POST', path: '/base/init', body: { base: 'B' } });
@@ -36,5 +44,17 @@ test('200 with summary on success', async () => {
   const r = await request(appWith(), { method: 'POST', path: '/base/init', body: { year: 2024, base: 'B' } });
   assert.equal(r.status, 200);
   assert.equal(r.body.created, 250);
+  assert.equal(r.body.done, true);
+});
+
+test('remove-partitions: 400 when base missing', async () => {
+  const r = await request(appWith(), { method: 'POST', path: '/base/remove-partitions', body: { year: 2023 } });
+  assert.equal(r.status, 400);
+});
+
+test('remove-partitions: 200 with summary on success', async () => {
+  const r = await request(appWith(), { method: 'POST', path: '/base/remove-partitions', body: { year: 2023, base: 'B' } });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.deleted, 250);
   assert.equal(r.body.done, true);
 });

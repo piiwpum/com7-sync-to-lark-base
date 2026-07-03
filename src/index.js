@@ -4,6 +4,7 @@ import { createTokenCache } from './infrastructure/lark/tokenCache.js';
 import { createLarkGateway } from './infrastructure/lark/LarkGatewayHttp.js';
 import { larkAuth as makeLarkAuth } from './infrastructure/web/middlewares/larkAuth.js';
 import { ProvisionYearBase } from './application/use-cases/ProvisionYearBase.js';
+import { RemoveAllPartitions } from './application/use-cases/RemoveAllPartitions.js';
 import { BaseController } from './infrastructure/web/controllers/BaseController.js';
 import { ITEC_FIELD_SCHEMA } from './infrastructure/config/itecFieldSchema.js';
 import { PARTITION_COUNT, partitionName, parsePartitionNo } from './domain/services/partition.js';
@@ -29,7 +30,10 @@ async function bootstrap() {
     partitionName,
     parsePartitionNo,
   });
-  const baseController = new BaseController({ provisionYearBase, budgetMs: config.baseInit.budgetMs });
+  const removeAllPartitions = new RemoveAllPartitions({ parsePartitionNo });
+  const baseController = new BaseController({
+    provisionYearBase, removeAllPartitions, budgetMs: config.baseInit.budgetMs,
+  });
 
   const app = createApp({ larkAuth, baseController });
 

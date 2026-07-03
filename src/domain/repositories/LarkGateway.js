@@ -44,6 +44,11 @@ export class LarkGateway {
     throw new Error('LarkGateway.createTable not implemented');
   }
 
+  /** @param {string} baseId @param {string} tableId */
+  async deleteTable(baseId, tableId) {
+    throw new Error('LarkGateway.deleteTable not implemented');
+  }
+
   /** @param {string} baseId @param {string} tableId @returns {Promise<string[]>} field names */
   async listFields(baseId, tableId) {
     throw new Error('LarkGateway.listFields not implemented');
