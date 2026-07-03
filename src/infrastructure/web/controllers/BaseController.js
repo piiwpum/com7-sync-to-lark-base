@@ -1,4 +1,4 @@
-import { BaseNotFoundError } from '../../../domain/errors.js';
+import { BaseNotFoundError, YearNotProvisionedError } from '../../../domain/errors.js';
 
 const DEFAULT_BUDGET_MS = 600000; // soft time budget per call; override via config/env
 
@@ -16,9 +16,10 @@ function parseYearBase(req, res) {
 }
 
 export class BaseController {
-  constructor({ provisionYearBase, removeAllPartitions, budgetMs = DEFAULT_BUDGET_MS }) {
+  constructor({ provisionYearBase, removeAllPartitions, getBaseStatus, budgetMs = DEFAULT_BUDGET_MS }) {
     this.provisionYearBase = provisionYearBase;
     this.removeAllPartitions = removeAllPartitions;
+    this.getBaseStatus = getBaseStatus;
     this.budgetMs = budgetMs;
   }
 
@@ -39,13 +40,28 @@ export class BaseController {
   removePartitions = async (req, res, next) => {
     const input = parseYearBase(req, res);
     if (!input) return;
+    const dryRun = req.query.dryRun === 'true';
     try {
       const summary = await this.removeAllPartitions.execute({
-        gateway: req.larkGateway, base: input.base, year: input.year, budgetMs: this.budgetMs,
+        gateway: req.larkGateway, base: input.base, year: input.year, budgetMs: this.budgetMs, dryRun,
       });
       res.status(200).json(summary);
     } catch (err) {
       if (err instanceof BaseNotFoundError) return res.status(404).json({ error: err.message });
+      next(err);
+    }
+  };
+
+  status = async (req, res, next) => {
+    const year = Number(req.query.year);
+    if (!Number.isInteger(year)) {
+      return res.status(400).json({ error: 'year query param is required and must be an integer' });
+    }
+    try {
+      const summary = await this.getBaseStatus.execute({ year });
+      res.status(200).json(summary);
+    } catch (err) {
+      if (err instanceof YearNotProvisionedError) return res.status(404).json({ error: err.message });
       next(err);
     }
   };

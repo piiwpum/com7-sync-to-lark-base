@@ -12,3 +12,11 @@ export class LarkAuthError extends Error {
     this.name = 'LarkAuthError';
   }
 }
+
+export class YearNotProvisionedError extends Error {
+  constructor(year) {
+    super(`year not provisioned: ${year}`);
+    this.name = 'YearNotProvisionedError';
+    this.year = year;
+  }
+}

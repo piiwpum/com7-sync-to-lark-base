@@ -6,9 +6,11 @@ import { createLarkGateway } from './infrastructure/lark/LarkGatewayHttp.js';
 import { larkAuth as makeLarkAuth } from './infrastructure/web/middlewares/larkAuth.js';
 import { ProvisionYearBase } from './application/use-cases/ProvisionYearBase.js';
 import { RemoveAllPartitions } from './application/use-cases/RemoveAllPartitions.js';
+import { GetBaseStatus } from './application/use-cases/GetBaseStatus.js';
 import { BaseController } from './infrastructure/web/controllers/BaseController.js';
 import { ITEC_FIELD_SCHEMA } from './infrastructure/config/itecFieldSchema.js';
 import { PARTITION_COUNT, partitionName, parsePartitionNo } from './domain/services/partition.js';
+import { createYearRepository } from './infrastructure/database/YearRepositoryMysql.js';
 
 /**
  * Composition root — the ONLY place that wires concrete implementations
@@ -19,6 +21,7 @@ import { PARTITION_COUNT, partitionName, parsePartitionNo } from './domain/servi
  */
 async function bootstrap() {
   const opsPool = createOpsPool(config.opsDb);
+  const yearRepository = createYearRepository(opsPool);
 
   const tokenCache = createTokenCache({ baseDomain: config.lark.baseDomain });
   const larkAuth = makeLarkAuth({
@@ -32,10 +35,12 @@ async function bootstrap() {
     partitionCount: PARTITION_COUNT,
     partitionName,
     parsePartitionNo,
+    yearRepository,
   });
-  const removeAllPartitions = new RemoveAllPartitions({ parsePartitionNo });
+  const removeAllPartitions = new RemoveAllPartitions({ parsePartitionNo, yearRepository });
+  const getBaseStatus = new GetBaseStatus({ partitionCount: PARTITION_COUNT, yearRepository });
   const baseController = new BaseController({
-    provisionYearBase, removeAllPartitions, budgetMs: config.baseInit.budgetMs,
+    provisionYearBase, removeAllPartitions, getBaseStatus, budgetMs: config.baseInit.budgetMs,
   });
 
   const app = createApp({ larkAuth, baseController, opsPool });
