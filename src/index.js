@@ -5,7 +5,7 @@ import { createLarkGateway } from './infrastructure/lark/LarkGatewayHttp.js';
 import { larkAuth as makeLarkAuth } from './infrastructure/web/middlewares/larkAuth.js';
 import { ProvisionYearBase } from './application/use-cases/ProvisionYearBase.js';
 import { BaseController } from './infrastructure/web/controllers/BaseController.js';
-import { ITEC_FIELD_SCHEMA, ITEC_FIELD_NAMES } from './infrastructure/config/itecFieldSchema.js';
+import { ITEC_FIELD_SCHEMA } from './infrastructure/config/itecFieldSchema.js';
 import { PARTITION_COUNT, partitionName, parsePartitionNo } from './domain/services/partition.js';
 
 /**
@@ -25,7 +25,6 @@ async function bootstrap() {
 
   const provisionYearBase = new ProvisionYearBase({
     fieldSchema: ITEC_FIELD_SCHEMA,
-    fieldNames: ITEC_FIELD_NAMES,
     partitionCount: PARTITION_COUNT,
     partitionName,
     parsePartitionNo,

@@ -3,28 +3,19 @@ import assert from 'node:assert/strict';
 import { ProvisionYearBase } from '../../src/application/use-cases/ProvisionYearBase.js';
 import { partitionName, parsePartitionNo } from '../../src/domain/services/partition.js';
 
-// 3 partitions total, schema of 2 fields
+// 3 partitions total, minimal schema
 const mk = (opts) => new ProvisionYearBase({
   fieldSchema: [{ type: 'text', name: 'A' }, { type: 'text', name: 'B' }],
-  fieldNames: ['A', 'B'], partitionCount: 3, partitionName, parsePartitionNo,
-  now: opts.now,
+  partitionCount: 3, partitionName, parsePartitionNo, now: opts.now,
 });
 
-function fakeGateway(initialTables = []) {
-  const tables = new Map(initialTables.map((t) => [t.name, { tableId: t.name, fields: t.fields ?? ['A', 'B'] }]));
+function fakeGateway(initialTableNames = []) {
+  const names = new Set(initialTableNames);
   return {
-    created: [], fieldsAdded: [],
+    created: [],
     async getBase() {},
-    async listTables() { return [...tables].map(([name, v]) => ({ name, tableId: v.tableId })); },
-    async createTable(_b, name, fields) {
-      tables.set(name, { tableId: name, fields: fields.map((f) => f.name) });
-      this.created.push(name); return name;
-    },
-    async listFields(_b, tid) { return [...tables.values()].find((v) => v.tableId === tid).fields; },
-    async createField(_b, tid, f) {
-      [...tables.values()].find((v) => v.tableId === tid).fields.push(f.name);
-      this.fieldsAdded.push([tid, f.name]);
-    },
+    async listTables() { return [...names].map((name) => ({ name, tableId: name })); },
+    async createTable(_b, name) { names.add(name); this.created.push(name); return name; },
   };
 }
 
@@ -36,17 +27,21 @@ test('creates all missing partitions on an empty base', async () => {
 });
 
 test('idempotent: complete base creates nothing', async () => {
-  const gw = fakeGateway([{ name: 'itec_001' }, { name: 'itec_002' }, { name: 'itec_003' }]);
+  const gw = fakeGateway(['itec_001', 'itec_002', 'itec_003']);
   const r = await mk({ now: () => 0 }).execute({ gateway: gw, base: 'B', year: 2024, budgetMs: 10000 });
   assert.equal(gw.created.length, 0);
+  assert.equal(r.existing, 3);
   assert.equal(r.created, 0);
   assert.equal(r.done, true);
 });
 
-test('backfills missing fields on a partial table', async () => {
-  const gw = fakeGateway([{ name: 'itec_001', fields: ['A'] }, { name: 'itec_002' }, { name: 'itec_003' }]);
-  await mk({ now: () => 0 }).execute({ gateway: gw, base: 'B', year: 2024, budgetMs: 10000 });
-  assert.deepEqual(gw.fieldsAdded, [['itec_001', 'B']]);
+test('resume: creates only the missing partitions (ignores non-itec tables)', async () => {
+  const gw = fakeGateway(['itec_001', 'Table', 'daily_01']);
+  const r = await mk({ now: () => 0 }).execute({ gateway: gw, base: 'B', year: 2024, budgetMs: 10000 });
+  assert.deepEqual(gw.created, ['itec_002', 'itec_003']);
+  assert.equal(r.existing, 1);
+  assert.equal(r.created, 2);
+  assert.equal(r.done, true);
 });
 
 test('guard stops early and reports remaining', async () => {
