@@ -1,14 +1,27 @@
 import { Router } from 'express';
 
 /**
- * Health check. Step 1: reports that the process is up.
- * Step 3 will extend this to ping both MySQL pools (Com7 read + ops store).
+ * Health check. Reports process liveness, and — if an opsPool (MySQL
+ * instance B) is wired in — pings it too. Com7 (instance A) is not wired
+ * in yet; that lands once the source DB is ready.
  */
-export function healthRoutes(_deps = {}) {
+export function healthRoutes({ opsPool } = {}) {
   const router = Router();
 
-  router.get('/', (_req, res) => {
-    res.json({ status: 'ok', uptime: process.uptime() });
+  router.get('/', async (_req, res) => {
+    const body = { status: 'ok', uptime: process.uptime() };
+
+    if (opsPool) {
+      try {
+        await opsPool.query('SELECT 1');
+        body.opsDb = 'ok';
+      } catch {
+        body.opsDb = 'error';
+        body.status = 'degraded';
+      }
+    }
+
+    res.status(body.status === 'ok' ? 200 : 503).json(body);
   });
 
   return router;

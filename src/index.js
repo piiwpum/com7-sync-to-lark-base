@@ -1,5 +1,6 @@
 import { config } from './infrastructure/config/env.js';
 import { createApp } from './infrastructure/web/app.js';
+import { createOpsPool } from './infrastructure/database/opsPool.js';
 import { createTokenCache } from './infrastructure/lark/tokenCache.js';
 import { createLarkGateway } from './infrastructure/lark/LarkGatewayHttp.js';
 import { larkAuth as makeLarkAuth } from './infrastructure/web/middlewares/larkAuth.js';
@@ -17,6 +18,8 @@ import { PARTITION_COUNT, partitionName, parsePartitionNo } from './domain/servi
  * builds a request-scoped gateway; nothing Lark-secret lives here.
  */
 async function bootstrap() {
+  const opsPool = createOpsPool(config.opsDb);
+
   const tokenCache = createTokenCache({ baseDomain: config.lark.baseDomain });
   const larkAuth = makeLarkAuth({
     tokenCache,
@@ -35,7 +38,7 @@ async function bootstrap() {
     provisionYearBase, removeAllPartitions, budgetMs: config.baseInit.budgetMs,
   });
 
-  const app = createApp({ larkAuth, baseController });
+  const app = createApp({ larkAuth, baseController, opsPool });
 
   const server = app.listen(config.port, () => {
     console.log(`[http] listening on http://localhost:${config.port} (${config.nodeEnv})`);
@@ -43,7 +46,10 @@ async function bootstrap() {
 
   const shutdown = (signal) => {
     console.log(`\n[app] ${signal} received, shutting down...`);
-    server.close(() => process.exit(0));
+    server.close(async () => {
+      await opsPool.end();
+      process.exit(0);
+    });
   };
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
