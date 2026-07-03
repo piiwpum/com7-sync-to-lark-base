@@ -35,7 +35,7 @@ Lark ไปทำ Lark Dashboard เอง
 
 | เรื่อง | ข้อสรุป |
 |---|---|
-| **วันที่เป็น พ.ศ. (Buddhist Era)** | `2569-05-14` = พ.ศ. 2569 = ค.ศ. 2026 — ทุกคอลัมน์วันที่ (`CrTime`, `SalesCreatedDate`, `UTime`) เป็น พ.ศ. → **ต้องแปลง −543 ปี ก่อน push** เพราะ Lark datetime เก็บเป็น epoch millis |
+| **วันที่เป็น พ.ศ. (Buddhist Era)** | `2569-05-14` = พ.ศ. 2569 = ค.ศ. 2026 — ทุกคอลัมน์วันที่ (`CrTime`, `SalesCreatedDate`, `UTime`) เป็น พ.ศ. → **ต้องแปลง −543 ปี ก่อน push** เพราะ Lark datetime เก็บเป็น epoch millis (**P0 พิสูจน์แล้ว**: ส่ง พ.ศ. ดิบ → Lark เก็บปี 2569, ดู §3.1) |
 | **`UTime` = updated_at** | ✅ ยืนยันแล้วว่า **ขยับทุกครั้งที่ record ถูกแก้** → ใช้เป็น watermark จับ change ได้ (ไม่ต้อง full-scan 100M) |
 | **`CrTime` = created_at** | immutable → ใช้ **ตัดปี/เลือก base** (ดู Decision #9) |
 | **PK ไม่มีประกาศชัด** | Com7 ไม่ยืนยัน PK และส่งข้อมูลจริงไม่มีกำหนด → เราไม่รอ ใช้ **surrogate key ที่เรา verify uniqueness เองบน mock** (ดู §6.1) |
@@ -49,6 +49,31 @@ Lark ไปทำ Lark Dashboard เอง
 - 1 table ได้สูงสุด **50K record**
 - 1 base ได้สูงสุด **300 table**
 - **POC พบว่า** การ fetch record จาก Lark เพื่อหา `lark_record_id` **ช้ามาก** → ห้ามใช้ใน sync path
+
+### 3.1 P0 verified บน Lark จริง (2026-07-03, Larksuite `sky-group.sg`, app bot)
+
+| เรื่อง | ผลจริง | กระทบดีไซน์ |
+|---|---|---|
+| **record_id ordering** | `batch_create` คืน `record_id_list` **เรียงตาม input เป๊ะ** (200/200, 0 mismatch) | ✅ `deriveKey → record_id` mapping ปลอดภัย |
+| **batch size cap** | **สูงสุด 200 rec/batch** (เกิน → `800010701`) | ⚠️ เดิมประเมิน 500/1000 **ผิด** — ใช้ 200 |
+| **write rate limit** | `800004135 "OpenAPIBatchAddRecords limited"` = **per-app per-method** | ⚠️ **parallel ข้าม table ไม่ช่วย** (ยิง 4 พร้อม ผ่าน 1) |
+| **sustained rate** | **~189 rec/s** (1 app, serial + retry) | → ETA backfill (ดูล่าง) |
+| **transient conflict** | เจอเป็นครั้งคราวตอนยิงรัว → retry/delay หาย | ✅ job_queue retry เอาอยู่ |
+| **datetime** | เก็บเป็น **epoch ms**, base tz = Asia/Bangkok; ส่ง epoch → โชว์ตรง | ต้องแปลง พ.ศ.→ค.ศ. + สร้าง base ด้วย `--time-zone Asia/Bangkok` |
+| **พ.ศ. ดิบ** | ส่ง `"2569-..."` → Lark เก็บ **ปี 2569** (เพี้ยน +543) | ⚠️ **ต้อง −543 บังคับ** (พิสูจน์แล้ว) |
+| **base access** | base ที่สร้าง manual → app เข้าไม่ได้ (`91403`) จนกว่าจะ **แชร์ base ให้ app** | ทุก base รายปีต้องแชร์ให้ sync app(s) ก่อน (runbook) |
+
+**ETA backfill (จาก 189 rec/s, 1 app):**
+
+| งาน | 1 app | 5 apps (sharding) |
+|---|---|---|
+| 40M (4 ปี) | ~59 ชม. (~2.5 วัน) | ~12 ชม. |
+| 100M (10 ปี) | ~147 ชม. (~6 วัน) | ~29 ชม. |
+| daily ~37K/วัน | **~3.3 นาที** ✅ | — |
+
+- **daily/incremental sบายมาก** — ปัญหาอยู่ที่ **backfill ครั้งแรก** เท่านั้น
+- **ทางเร่ง = multi-app sharding** (limit เป็น per-app → N app หมุนเขียน ≈ N×189) หรือขอ quota tier สูงจาก Lark
+- แต่ละ app ในพูลต้องถูกแชร์เข้าทุก base ที่จะเขียน
 
 ---
 
@@ -234,9 +259,10 @@ deriveKey(row) = `${SellBranch}|${SellID}|${RowNo}`
 | 1 | Schema / PK / date column / updated_at | ✅ **เคลียร์** — มี CSV, `UTime`=updated (ขยับจริง), ตัดปีด้วย `CrTime`, PK ใช้ surrogate `deriveKey()` |
 | 2 | การแก้ historical: มี update/delete ย้อนหลังไหม (physical vs soft-delete) | ⏳ **ต้องเช็ค** — กระทบ delete-detection (§9) |
 | 3 | ~~Redis infra~~ → **MySQL (instance B) infra** — spec, backup/PITR, HA | ⏳ ต้องยืนยัน |
-| 4 | **Lark app quota** — write QPS + batch size (500/1000?) → ประเมิน ETA backfill 40M | ⏳ **P0 critical** |
+| 4 | **Lark app quota** — write QPS + batch size | ✅ **เคลียร์** (§3.1): batch 200, ~189 rec/s/app, per-app limit, parallel ไม่ช่วย → เหลือ **ตัดสินใจ multi-app sharding** เพื่อเร่ง backfill |
 | 5 | **Field naming** MySQL → Lark: ใช้ชื่อเป๊ะ (มี space/`/`/`%`) หรือ normalize? ใครเป็นเจ้าของ spec | ⏳ กระทบ provisioning |
-| 6 | เลข "ปี" ใน config `{year, base_id}` = ค.ศ. หรือ พ.ศ.? (ตัดด้วย CrTime, TZ = Asia/Bangkok) | ⏳ เคาะเลขปี |
+| 6 | เลข "ปี" ใน config `{year, base_id}` = ค.ศ. หรือ พ.ศ.? | ⏳ เคาะเลขปี (TZ = Asia/Bangkok ✅ ยืนยันจาก §3.1; ตัดด้วย CrTime) |
+| 7 | **จำนวน app ในพูล** (multi-app sharding) + ใครสร้าง/แชร์ base ให้ทุก app | ⏳ ขึ้นกับ ETA backfill ที่ยอมรับได้ |
 
 ### 11.1 Uniqueness check ต้องรันบน mock ก่อนลงมือ (verify §6.1)
 
