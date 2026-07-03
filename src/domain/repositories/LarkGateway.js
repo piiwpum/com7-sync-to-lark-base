@@ -28,4 +28,29 @@ export class LarkGateway {
   async countRecords(q) {
     throw new Error('LarkGateway.countRecords not implemented');
   }
+
+  /** Resolve if base exists/accessible; throw BaseNotFoundError otherwise. @param {string} baseId */
+  async getBase(baseId) {
+    throw new Error('LarkGateway.getBase not implemented');
+  }
+
+  /** @param {string} baseId @returns {Promise<Array<{tableId:string,name:string}>>} */
+  async listTables(baseId) {
+    throw new Error('LarkGateway.listTables not implemented');
+  }
+
+  /** @param {string} baseId @param {string} name @param {object[]} fields @returns {Promise<string>} tableId */
+  async createTable(baseId, name, fields) {
+    throw new Error('LarkGateway.createTable not implemented');
+  }
+
+  /** @param {string} baseId @param {string} tableId @returns {Promise<string[]>} field names */
+  async listFields(baseId, tableId) {
+    throw new Error('LarkGateway.listFields not implemented');
+  }
+
+  /** @param {string} baseId @param {string} tableId @param {object} field */
+  async createField(baseId, tableId, field) {
+    throw new Error('LarkGateway.createField not implemented');
+  }
 }
