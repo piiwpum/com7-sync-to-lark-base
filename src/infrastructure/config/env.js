@@ -29,4 +29,9 @@ export const config = {
   lark: {
     baseDomain: process.env.LARK_BASE_DOMAIN ?? 'https://open.larksuite.com',
   },
+
+  // POST /base/init soft time budget per call (ms) before it returns partial.
+  baseInit: {
+    budgetMs: num(process.env.BASE_INIT_BUDGET_MS, 120000),
+  },
 };

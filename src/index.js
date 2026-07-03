@@ -29,7 +29,7 @@ async function bootstrap() {
     partitionName,
     parsePartitionNo,
   });
-  const baseController = new BaseController({ provisionYearBase });
+  const baseController = new BaseController({ provisionYearBase, budgetMs: config.baseInit.budgetMs });
 
   const app = createApp({ larkAuth, baseController });
 
