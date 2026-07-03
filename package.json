@@ -1,0 +1,21 @@
+{
+  "name": "service",
+  "version": "1.0.0",
+  "description": "Node.js + Express + Redis service (clean architecture)",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "redis:up": "docker compose up -d redis",
+    "redis:down": "docker compose down"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "redis": "^4.7.0"
+  }
+}
