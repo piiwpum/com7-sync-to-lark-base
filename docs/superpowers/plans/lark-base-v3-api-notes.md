@@ -11,13 +11,19 @@ body: { app_id, app_secret }
 ```
 Auth header for all base calls: `Authorization: Bearer <tenant_access_token>`.
 
-## List tables  (also used as base-existence check)
+## List tables  ⚠️ base/v3 CAPS AT 20 — use bitable/v1 instead
 ```
-GET /open-apis/base/v3/bases/{base}/tables?page_size=100[&page_token=...]
-→ data.tables: [ { id:"tbl...", name:"..." } ]      # key is `tables` + `id` (NOT items/table_id)
-  data.total, data.has_more, data.page_token
-bad base token → code 91402 "NOTEXIST"              # ← map to BaseNotFoundError (404)
+GET /open-apis/base/v3/bases/{base}/tables?page_size=100
+→ data.tables:[{id,name}], data.total  BUT returns only 20 items, no page_token
+   (confirmed live: 37 tables in base → returns 20, has_more/page_token undefined) → CANNOT enumerate >20
 ```
+**Use bitable/v1 to list tables** (honors page_size, paginates properly — 53 tables returned in one page):
+```
+GET /open-apis/bitable/v1/apps/{base}/tables?page_size=100[&page_token=...]
+→ data.items:[{ table_id, name }], data.has_more, data.page_token   # key `items` + `table_id`
+```
+(base/v3 tables?page_size=1 is still fine for the existence check — bad base → code 91402 "NOTEXIST".)
+Creating a table whose name already exists → code **800010102** "validation_error" (duplicate).
 
 ## Get base (NOT used)
 ```

@@ -19,11 +19,11 @@ test('getBase resolves when tables call ok', async () => {
   await g.getBase('B'); // does not throw
 });
 
-test('listTables aggregates pages and maps id->tableId', async () => {
+test('listTables (bitable/v1) aggregates pages and maps table_id->tableId', async () => {
   let page = 0;
   const g = gw(stub(() => (page++ === 0
-    ? { code: 0, data: { tables: [{ id: 't1', name: 'itec_001' }], has_more: true, page_token: 'p2' } }
-    : { code: 0, data: { tables: [{ id: 't2', name: 'Table' }], has_more: false } })));
+    ? { code: 0, data: { items: [{ table_id: 't1', name: 'itec_001' }], has_more: true, page_token: 'p2' } }
+    : { code: 0, data: { items: [{ table_id: 't2', name: 'Table' }], has_more: false } })));
   assert.deepEqual(await g.listTables('B'), [
     { tableId: 't1', name: 'itec_001' }, { tableId: 't2', name: 'Table' },
   ]);

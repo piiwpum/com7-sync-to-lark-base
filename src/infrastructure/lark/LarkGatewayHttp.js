@@ -41,15 +41,18 @@ export function createLarkGateway({ token, baseDomain, fetchFn = fetch, sleepFn 
     if (b.code !== 0) throw fail('getBase', b);
   }
 
+  // NOTE: uses bitable/v1 (not base/v3) to list tables. base/v3 list-tables
+  // caps at 20 items and returns no page_token (confirmed live), so it cannot
+  // enumerate a base with >20 tables. bitable/v1 honors page_size + paginates.
   async function listTables(baseId) {
     const out = [];
     let pageToken;
     do {
       const qs = new URLSearchParams({ page_size: '100', ...(pageToken ? { page_token: pageToken } : {}) });
-      const b = await call(`/open-apis/base/v3/bases/${baseId}/tables?${qs}`);
+      const b = await call(`/open-apis/bitable/v1/apps/${baseId}/tables?${qs}`);
       if (b.code === BASE_NOT_FOUND) throw new BaseNotFoundError(baseId);
       if (b.code !== 0) throw fail('listTables', b);
-      for (const t of b.data.tables ?? []) out.push({ tableId: t.id, name: t.name });
+      for (const t of b.data.items ?? []) out.push({ tableId: t.table_id ?? t.id, name: t.name });
       pageToken = b.data.has_more ? b.data.page_token : undefined;
     } while (pageToken);
     return out;
