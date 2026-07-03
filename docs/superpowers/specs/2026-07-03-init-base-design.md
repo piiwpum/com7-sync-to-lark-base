@@ -1,4 +1,4 @@
-# Spec — `POST /years` (Init Year Base / Provision Partitions)
+# Spec — `POST /base/init` (Init Year Base / Provision Partitions)
 
 > ส่วนแรกของ **Lark setup** (1 ใน 3 ส่วนหลัก: Lark setup · full sync ตามปี · interval sync)
 > วันที่: 2026-07-03 · สถานะ: design approved, รอ review ก่อนทำ plan
@@ -21,7 +21,7 @@ Related decisions (จาก [../../sync-architecture.md](../../sync-architectur
 ## 2. API Contract
 
 ```
-POST /lark/base/init
+POST /base/init
 Headers:                                   // ทุก route ในระบบใช้แบบเดียวกัน (§2.1)
   X-Lark-App-Id:     cli_xxx
   X-Lark-App-Secret: xxxxxxxx
@@ -70,7 +70,7 @@ Body: { "year": 2024, "base": "QRqjbxgQ2aqzPksV6MAlhCRvgSd" }   // year = ค.�
 ## 4. Flow
 
 ```
-POST /lark/base/init  (headers: X-Lark-App-Id, X-Lark-App-Secret)  { year, base }
+POST /base/init  (headers: X-Lark-App-Id, X-Lark-App-Secret)  { year, base }
  └─ 0. auth middleware: อ่าน creds จาก header → แลก/cache tenant_token → สร้าง request-scoped LarkGateway   → 401 ถ้าขาด/แลกไม่ได้
  └─ 1. validate: year เป็น int ค.ศ. (เช่น 2016..2026), base ไม่ว่าง        → 400 ถ้าไม่ผ่าน
  └─ 2. LarkGateway.getBase(base)                                        → 404 ถ้าไม่เจอ
@@ -117,7 +117,7 @@ POST /lark/base/init  (headers: X-Lark-App-Id, X-Lark-App-Secret)  { year, base 
 | infra config | `config/itecFieldSchema.js` | 41 fields + type mapping (§3) |
 | infra adapter | `repositories/LarkGatewayHttp.js` | implement port; สร้างจาก **factory(appId, appSecret)** |
 | infra web | `web/middlewares/larkAuth.js` | อ่าน header creds → แลก/cache tenant_token → แนบ request-scoped gateway (§2.1); ขาด → 401 |
-| infra web | `web/routes/larkBase.js` + controller | `POST /lark/base/init` → use-case (ใช้ gateway จาก middleware) |
+| infra web | `web/routes/base.js` + controller | `POST /base/init` → use-case (ใช้ gateway จาก middleware) |
 | infra | `infrastructure/lark/tokenCache.js` | cache tenant_access_token keyed by `app_id` (in-memory) |
 
 - **Env change:** ตัด `LARK_APP_ID` / `LARK_APP_SECRET` ออกจาก `config/env.js` (creds มาจาก header แล้ว)
