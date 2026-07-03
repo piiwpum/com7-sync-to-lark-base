@@ -1,15 +1,38 @@
 import { config } from './infrastructure/config/env.js';
 import { createApp } from './infrastructure/web/app.js';
+import { createTokenCache } from './infrastructure/lark/tokenCache.js';
+import { createLarkGateway } from './infrastructure/lark/LarkGatewayHttp.js';
+import { larkAuth as makeLarkAuth } from './infrastructure/web/middlewares/larkAuth.js';
+import { ProvisionYearBase } from './application/use-cases/ProvisionYearBase.js';
+import { BaseController } from './infrastructure/web/controllers/BaseController.js';
+import { ITEC_FIELD_SCHEMA, ITEC_FIELD_NAMES } from './infrastructure/config/itecFieldSchema.js';
+import { PARTITION_COUNT, partitionName, parsePartitionNo } from './domain/services/partition.js';
 
 /**
  * Composition root — the ONLY place that wires concrete implementations
- * (pools → repositories → use-cases → controllers → web).
+ * (config → lark adapters → use-cases → controllers → web).
  *
- * Step 1: boots the Express control plane with /health only.
- * Later phases wire the MySQL pools (Step 3), repositories and use-cases here.
+ * Lark app credentials are supplied per-request via headers, so `larkAuth`
+ * builds a request-scoped gateway; nothing Lark-secret lives here.
  */
 async function bootstrap() {
-  const app = createApp({});
+  const tokenCache = createTokenCache({ baseDomain: config.lark.baseDomain });
+  const larkAuth = makeLarkAuth({
+    tokenCache,
+    createGateway: createLarkGateway,
+    baseDomain: config.lark.baseDomain,
+  });
+
+  const provisionYearBase = new ProvisionYearBase({
+    fieldSchema: ITEC_FIELD_SCHEMA,
+    fieldNames: ITEC_FIELD_NAMES,
+    partitionCount: PARTITION_COUNT,
+    partitionName,
+    parsePartitionNo,
+  });
+  const baseController = new BaseController({ provisionYearBase });
+
+  const app = createApp({ larkAuth, baseController });
 
   const server = app.listen(config.port, () => {
     console.log(`[http] listening on http://localhost:${config.port} (${config.nodeEnv})`);

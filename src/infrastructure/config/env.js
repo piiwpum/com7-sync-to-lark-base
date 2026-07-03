@@ -24,10 +24,9 @@ export const config = {
     database: process.env.OPS_DB_NAME ?? 'sync_ops',
   },
 
-  // LarkBase API (the only external write target)
+  // LarkBase API. App credentials are NOT stored here — they arrive per-request
+  // via headers (X-Lark-App-Id / X-Lark-App-Secret). Only the domain is config.
   lark: {
-    appId: process.env.LARK_APP_ID ?? '',
-    appSecret: process.env.LARK_APP_SECRET ?? '',
     baseDomain: process.env.LARK_BASE_DOMAIN ?? 'https://open.larksuite.com',
   },
 };
