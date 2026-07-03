@@ -1,6 +1,6 @@
 import { BaseNotFoundError } from '../../../domain/errors.js';
 
-const DEFAULT_BUDGET_MS = 120000; // soft time budget per call; override via config/env
+const DEFAULT_BUDGET_MS = 600000; // soft time budget per call; override via config/env
 
 export class BaseController {
   constructor({ provisionYearBase, budgetMs = DEFAULT_BUDGET_MS }) {
