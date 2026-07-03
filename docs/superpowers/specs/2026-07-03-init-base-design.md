@@ -21,18 +21,29 @@ Related decisions (จาก [../../sync-architecture.md](../../sync-architectur
 ## 2. API Contract
 
 ```
-POST /years
+POST /lark/base/init
+Headers:                                   // ทุก route ในระบบใช้แบบเดียวกัน (§2.1)
+  X-Lark-App-Id:     cli_xxx
+  X-Lark-App-Secret: xxxxxxxx
 Body: { "year": 2024, "base": "QRqjbxgQ2aqzPksV6MAlhCRvgSd" }   // year = ค.ศ.
 ```
 
 | กรณี | Response |
 |---|---|
+| header ครีเดนเชียลขาด/ผิด | `401 { "error": "invalid or missing Lark credentials" }` |
 | input ไม่ valid | `400 { "error": "<reason>" }` |
 | base ไม่เจอ | `404 { "error": "base not found: <id>" }` |
 | ทำงาน (อาจยังไม่ครบ) | `200 { year, base, total:250, existing, created, remaining, done }` |
 
 - `done: true` = ครบ 250 แล้ว · `done: false` = ชน guard → **เรียกซ้ำเพื่อทำต่อ**
 - **Idempotent:** เรียกซ้ำปลอดภัยเสมอ (สร้างเฉพาะที่ยังขาด)
+
+### 2.1 Auth — app credentials ต่อ request (cross-cutting ทุก route)
+
+- **ทุก endpoint** รับ `app_id` + `app_secret` จาก **header** (`X-Lark-App-Id`, `X-Lark-App-Secret`) — server **ไม่เก็บ Lark secret ใน env**
+- ประโยชน์: รองรับ **multi-app sharding** (caller หมุน app per-request เพื่อเร่ง backfill), server เป็น stateless ต่อ credential
+- **token cache:** middleware แลก `tenant_access_token` (อายุ ~2h) แล้ว cache **keyed by `app_id`** (in-memory ก่อน, ย้าย MySQL ทีหลังได้)
+- **security:** บังคับ HTTPS, **ห้าม log `app_secret`**, ครีเดนเชียลขาด/แลก token ไม่ได้ → `401`
 
 ---
 
@@ -59,7 +70,8 @@ Body: { "year": 2024, "base": "QRqjbxgQ2aqzPksV6MAlhCRvgSd" }   // year = ค.�
 ## 4. Flow
 
 ```
-POST /years {year, base}
+POST /lark/base/init  (headers: X-Lark-App-Id, X-Lark-App-Secret)  { year, base }
+ └─ 0. auth middleware: อ่าน creds จาก header → แลก/cache tenant_token → สร้าง request-scoped LarkGateway   → 401 ถ้าขาด/แลกไม่ได้
  └─ 1. validate: year เป็น int ค.ศ. (เช่น 2016..2026), base ไม่ว่าง        → 400 ถ้าไม่ผ่าน
  └─ 2. LarkGateway.getBase(base)                                        → 404 ถ้าไม่เจอ
  └─ 3. LarkGateway.listTables(base) → filter ชื่อ match ^itec_\d{3}$
@@ -87,6 +99,7 @@ POST /years {year, base}
 
 | สถานการณ์ | จัดการ |
 |---|---|
+| header creds ขาด / แลก tenant_token ไม่ได้ | 401 (ไม่ทำอะไร); ห้าม log secret |
 | base ไม่เจอ | 404 `base not found` (ไม่สร้างอะไร) |
 | rate-limit `800004135` | backoff + retry; ถ้า retry เกินเพดาน → นับเป็น remaining, `done:false` |
 | createTable สำเร็จแต่ field ไม่ครบ (guard ตัด/limit) | รอบถัดไป field-list เจอ field ขาด → เติม (field-level idempotency) |
@@ -98,14 +111,17 @@ POST /years {year, base}
 
 | ชั้น | ไฟล์ | หน้าที่ |
 |---|---|---|
-| application | `use-cases/ProvisionYearBase.js` | orchestrate flow §4 (pure, พึ่งแค่ ports) |
+| application | `use-cases/ProvisionYearBase.js` | orchestrate flow §4 (pure, พึ่งแค่ ports; รับ gateway ที่ inject มา) |
 | domain | `services/partitionName.js` | `partitionName(n) → "itec_001"`, `PARTITION_COUNT=250` |
 | domain (port) | `repositories/LarkGateway.js` | `getBase / listTables / createTable / listFields / createField` |
 | infra config | `config/itecFieldSchema.js` | 41 fields + type mapping (§3) |
-| infra adapter | `repositories/LarkGatewayHttp.js` | implement port ด้วย Lark API จริง |
-| infra web | `web/routes/years.js` + controller | `POST /years` → use-case |
+| infra adapter | `repositories/LarkGatewayHttp.js` | implement port; สร้างจาก **factory(appId, appSecret)** |
+| infra web | `web/middlewares/larkAuth.js` | อ่าน header creds → แลก/cache tenant_token → แนบ request-scoped gateway (§2.1); ขาด → 401 |
+| infra web | `web/routes/larkBase.js` + controller | `POST /lark/base/init` → use-case (ใช้ gateway จาก middleware) |
+| infra | `infrastructure/lark/tokenCache.js` | cache tenant_access_token keyed by `app_id` (in-memory) |
 
-**MySQL write-through** (`sync_partition`, `sync_year`) = **deferred** จนกว่า MySQL (instance B) พร้อม; ออกแบบให้เป็น optional side-effect (ไม่ block Approach A)
+- **Env change:** ตัด `LARK_APP_ID` / `LARK_APP_SECRET` ออกจาก `config/env.js` (creds มาจาก header แล้ว)
+- **MySQL write-through** (`sync_partition`, `sync_year`) = **deferred** จนกว่า MySQL (instance B) พร้อม; ออกแบบให้เป็น optional side-effect (ไม่ block Approach A)
 
 ---
 
