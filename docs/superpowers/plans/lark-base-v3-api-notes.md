@@ -31,19 +31,23 @@ POST /open-apis/base/v3/bases/{base}/tables
 body: { "name":"itec_001", "fields":[ <field defs> ] }   # FLAT body — NOT { table:{...} } (that's bitable v1 → 800010701)
 → data.id = "tbl..."      # table id key is `id`
 ```
-list-fields on the new table returned all inline fields in ONE call → **1 API call per table** (≈ minutes for 250, not hours).
+Confirmed live with the full 41-field schema: create returns `code 0` and the table has `total:41` fields → **atomic, 1 API call per table** (≈ minutes for 250, not hours). (list-fields only shows 20 of them — see caveat below — but they all exist.)
 
 Field def shape (same as verified via lark-cli):
 - text:     `{ "type":"text", "name":"Product" }`
 - number:   `{ "type":"number", "name":"SellID", "style":{ "type":"plain", "precision":0 } }`
 - datetime: `{ "type":"datetime", "name":"CrTime", "style":{ "format":"yyyy-MM-dd HH:mm" } }`
 
-## List fields  (resume path)
+## List fields  ⚠️ CAPPED AT 20 — cannot enumerate a 41-field table
 ```
-GET /open-apis/base/v3/bases/{base}/tables/{tid}/fields?page_size=100[&page_token=...]
-→ data.fields: [ { id, name, style, type } ]        # key `fields` + `name`
-  data.total, data.has_more, data.page_token
+GET /open-apis/base/v3/bases/{base}/tables/{tid}/fields?page_size=100
+→ data.fields: [ { id, name, style, type } ]   # returns only 20 items even for a 41-field table
+  data.total = 41                              # ← TRUE count is here
+  data.has_more = undefined, data.page_token = undefined   # NO pagination token → can't fetch fields 21..41
 ```
+Confirmed live: `page_size=20` and `page_size=100` both return 20 fields, `total:41`, no page_token.
+→ **Do not use list-fields to verify field completeness.** Use `data.total` for the count only.
+Because create-table is atomic (below), provisioning treats **table-exists ⇒ complete** and skips field enumeration.
 
 ## Create field  (resume path)
 ```
