@@ -1,73 +1,49 @@
-# service
+# com7-lark-sync
 
-Node.js + Express + Redis REST API built with **clean architecture**.
+Com7 → LarkBase **one-way sync / reconciliation engine**. Pushes raw sales rows
+from Com7 (MySQL) up to LarkBase and keeps them equal over time (push + diff +
+heal). Built with **clean architecture** on Express + MySQL.
+
+> Design & context: [docs/sync-architecture.md](docs/sync-architecture.md)
 
 ## Architecture
 
 ```
 src/
-├── domain/                     # Enterprise business rules (no dependencies)
-│   ├── entities/User.js        #   entities + domain errors
-│   └── repositories/           #   repository ports (interfaces)
-├── application/                # Application business rules
-│   └── use-cases/user/         #   CreateUser, GetUser, ListUsers, DeleteUser
-├── infrastructure/             # Frameworks & drivers (implementation details)
-│   ├── config/env.js           #   env loading
-│   ├── database/redisClient.js #   Redis connection
-│   ├── repositories/           #   RedisUserRepository (adapter)
-│   └── web/                    #   Express app, routes, controllers, middleware
-└── index.js                    # Composition root (dependency injection)
+├── domain/                      # business rules (no MySQL/Lark/Express knowledge)
+│   ├── entities/                #   SyncYear, Partition, Mapping
+│   ├── services/                #   deriveKey (identity), checksum  [WIP]
+│   └── repositories/            #   ports: Source, Mapping, JobQueue, LarkGateway
+├── application/use-cases/       # orchestration (depends only on ports)  [WIP]
+├── infrastructure/              # frameworks & drivers
+│   ├── config/env.js            #   env: MySQL A (read) + MySQL B (ops) + Lark
+│   ├── database/                #   pools + migrations  [WIP]
+│   ├── repositories/            #   MySQL/Lark adapters  [WIP]
+│   └── web/                     #   Express control plane (/health, ...)
+└── index.js                     # composition root (dependency injection)
 ```
 
-**Dependency rule:** dependencies point inward. `domain` knows nothing about
-Express or Redis; use-cases depend only on the repository *port*; the concrete
-Redis adapter is injected at the composition root (`index.js`). Swapping Redis
-for Postgres means writing one new repository — no domain/use-case changes.
+**Dependency rule:** dependencies point inward. Use-cases depend only on the
+repository *ports*; concrete MySQL/Lark adapters are injected at the composition
+root (`index.js`).
+
+## Data stores
+
+| Store | Role |
+|-------|------|
+| MySQL **instance A** (Com7) | source `itec` / `daily_itec_temp` — **read-only** |
+| MySQL **instance B** (ops)  | `sync_mapping` / `sync_partition` / `sync_state` / `job_queue` — durable |
 
 ## Getting started
 
 ```bash
-# 1. Install deps
 npm install
-
-# 2. Start a local Redis (Docker)
-npm run redis:up          # or: docker compose up -d redis
-
-# 3. Configure env
-cp .env.example .env
-
-# 4. Run
-npm run dev               # watch mode
-# npm start               # production
+cp .env.example .env      # fill in the two MySQL instances + Lark creds
+npm run dev               # watch mode  (npm start for prod)
+curl http://localhost:3000/health
 ```
 
-> No Docker? Install Redis locally (`brew install redis && brew services start redis`)
-> and keep `REDIS_URL=redis://localhost:6379`.
+## Status
 
-## API
-
-| Method | Path             | Description       |
-|--------|------------------|-------------------|
-| GET    | `/health`        | Health check      |
-| POST   | `/api/users`     | Create a user     |
-| GET    | `/api/users`     | List users        |
-| GET    | `/api/users/:id` | Get user by id    |
-| DELETE | `/api/users/:id` | Delete a user     |
-
-### Examples
-
-```bash
-# Create
-curl -X POST http://localhost:3000/api/users \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"Ada Lovelace","email":"ada@example.com"}'
-
-# List
-curl http://localhost:3000/api/users
-
-# Get one
-curl http://localhost:3000/api/users/<id>
-
-# Delete
-curl -X DELETE http://localhost:3000/api/users/<id>
-```
+Foundation in progress (Step 1: clean-architecture skeleton + `/health`).
+See [docs/sync-architecture.md](docs/sync-architecture.md) §12 for the phase plan.
