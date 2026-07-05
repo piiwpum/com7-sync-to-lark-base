@@ -4,9 +4,10 @@
  */
 export class SourceRepository {
   /**
-   * A chunk of itec rows for backfill, keyed by an ascending cursor.
-   * @param {{ year:number, afterCursor?:string|number, limit:number }} q
-   * @returns {Promise<object[]>}
+   * A chunk of itec rows for a year, ordered by (SellID, RowNo) ascending —
+   * that's the only index Com7's `itec` table has (no PK, no CrTime index).
+   * @param {{ year:number, afterCursor?:{sellId:number, rowNo:number}|null, limit:number }} q
+   * @returns {Promise<object[]>} raw rows, DB column names as keys
    */
   async fetchItecChunk(q) {
     throw new Error('SourceRepository.fetchItecChunk not implemented');
