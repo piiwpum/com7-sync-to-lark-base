@@ -11,9 +11,22 @@ export function pendingMigrations(available, applied) {
 }
 
 /**
+ * Splits a migration file's raw SQL into individual statements on top-level
+ * semicolons. Lets a single migration file contain multiple ALTER/CREATE
+ * statements without needing `multipleStatements: true` on the connection
+ * pool — that flag would apply to every query the pool ever runs (the app's
+ * live HTTP/worker traffic included), which is unnecessary SQL-injection
+ * surface for what is really just a migration-runner concern. Fine for our
+ * plain DDL migrations (no stored procedures/triggers with embedded `;`).
+ */
+function splitStatements(sql) {
+  return sql.split(';').map((s) => s.trim()).filter(Boolean);
+}
+
+/**
  * Apply every pending .sql file in `migrationsDir` against `pool`, tracked in
- * a `schema_migrations` table. CREATE TABLE statements in MySQL are not
- * transactional, so each migration just runs its statement then records
+ * a `schema_migrations` table. CREATE/ALTER TABLE statements in MySQL are not
+ * transactional, so each migration just runs its statement(s) then records
  * itself — there is no partial-transaction rollback for DDL.
  */
 export async function runMigrations({ pool, migrationsDir }) {
@@ -31,7 +44,9 @@ export async function runMigrations({ pool, migrationsDir }) {
 
   for (const filename of pending) {
     const sql = readFileSync(join(migrationsDir, filename), 'utf8');
-    await pool.query(sql);
+    for (const statement of splitStatements(sql)) {
+      await pool.query(statement);
+    }
     await pool.query('INSERT INTO schema_migrations (filename) VALUES (?)', [filename]);
   }
 
