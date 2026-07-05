@@ -2,6 +2,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { RunFullSyncJob } from '../../src/application/use-cases/RunFullSyncJob.js';
+import { crc32 } from '../../src/domain/services/checksum.js';
+import { transformItecRow } from '../../src/domain/services/transformItecRow.js';
 
 const FIELD_NAMES = ['CrTime', 'SellID', 'SellBranch', 'Product'];
 
@@ -15,6 +17,7 @@ function makeDeps({ chunks, reserveSlotsImpl, batchCreateImpl, initialCheckpoint
   const stateWrites = [];
   const boundaryWrites = [];
   const jobQueueCalls = { complete: [], fail: [], retry: [] };
+  const tokenCalls = [];
 
   return {
     sourceRepository: {
@@ -33,7 +36,7 @@ function makeDeps({ chunks, reserveSlotsImpl, batchCreateImpl, initialCheckpoint
       async fail(q) { jobQueueCalls.fail.push(q); },
       async retry(q) { jobQueueCalls.retry.push(q); },
     },
-    tokenCache: { async getToken() { return 'tok'; } },
+    tokenCache: { async getToken(appId, appSecret) { tokenCalls.push({ appId, appSecret }); return 'tok'; } },
     createGateway: () => ({ batchCreate: batchCreateImpl ?? (async ({ rows }) => rows.map((_r, i) => `rec${i}`)) }),
     baseDomain: 'https://x',
     fieldNames: FIELD_NAMES,
@@ -41,7 +44,7 @@ function makeDeps({ chunks, reserveSlotsImpl, batchCreateImpl, initialCheckpoint
     maxAttempts: 5,
     retryDelayMs: 60000,
     now: () => Date.parse('2026-07-03T10:00:00Z'),
-    _inspect: { savedMappings, stateWrites, boundaryWrites, jobQueueCalls },
+    _inspect: { savedMappings, stateWrites, boundaryWrites, jobQueueCalls, tokenCalls },
   };
 }
 
@@ -55,6 +58,10 @@ test('happy path: one chunk, completes the job and scrubs the secret', async () 
   assert.equal(deps._inspect.savedMappings[0].larkRecordId, 'rec0');
   assert.equal(deps._inspect.savedMappings[0].baseId, 'BASE1');
   assert.equal(deps._inspect.savedMappings[0].larkTableId, 'tbl1');
+  assert.equal(
+    deps._inspect.savedMappings[0].checksum,
+    crc32(JSON.stringify(transformItecRow(row(1, 1)))),
+  );
 
   assert.equal(deps._inspect.jobQueueCalls.complete.length, 1);
   assert.deepEqual(deps._inspect.jobQueueCalls.complete[0], { id: 1, payload: { appId: 'a' } }); // secret scrubbed
@@ -64,11 +71,20 @@ test('happy path: one chunk, completes the job and scrubs the secret', async () 
 });
 
 test('advances the cursor and stops when a chunk comes back empty', async () => {
-  const deps = makeDeps({ chunks: [[row(1, 1)], []] });
+  const deps = makeDeps({ chunks: [[row(1, 1)], [row(2, 1)], []] });
   const uc = new RunFullSyncJob(deps);
   await uc.execute({ id: 1, year: 2024, attempts: 0, payload: { appId: 'a', appSecret: 's' } });
-  assert.equal(deps._inspect.savedMappings.length, 1);
+  assert.equal(deps._inspect.savedMappings.length, 2);
   assert.equal(deps._inspect.jobQueueCalls.complete.length, 1);
+
+  // Two non-empty chunks ran before the empty one stopped the loop, so a
+  // fresh token must have been fetched once per chunk that actually ran —
+  // not once for the whole job, and not once per row.
+  assert.equal(deps._inspect.tokenCalls.length, 2);
+  assert.deepEqual(deps._inspect.tokenCalls, [
+    { appId: 'a', appSecret: 's' },
+    { appId: 'a', appSecret: 's' },
+  ]);
 });
 
 test('resumes from an existing checkpoint by passing it as afterCursor', async () => {
