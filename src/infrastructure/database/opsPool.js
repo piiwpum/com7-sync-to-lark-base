@@ -9,5 +9,6 @@ export function createOpsPool({ host, port, user, password, database }) {
     host, port, user, password, database,
     waitForConnections: true,
     connectionLimit: 10,
+    multipleStatements: true,
   });
 }
