@@ -40,4 +40,9 @@ export class JobQueue {
   async findActive(q) {
     throw new Error('JobQueue.findActive not implemented');
   }
+
+  /** Most recent job of any status for {type, year} (for status reporting). @param {{ type:string, year:number }} q @returns {Promise<object|null>} */
+  async findLatest(q) {
+    throw new Error('JobQueue.findLatest not implemented');
+  }
 }

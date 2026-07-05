@@ -76,5 +76,13 @@ export function createJobQueue(pool) {
     return rows.length === 0 ? null : mapRow(rows[0]);
   }
 
-  return { enqueue, claim, complete, fail, retry, findActive };
+  async function findLatest({ type, year }) {
+    const [rows] = await pool.query(
+      `SELECT * FROM job_queue WHERE type=? AND year=? ORDER BY id DESC LIMIT 1`,
+      [type, year],
+    );
+    return rows.length === 0 ? null : mapRow(rows[0]);
+  }
+
+  return { enqueue, claim, complete, fail, retry, findActive, findLatest };
 }

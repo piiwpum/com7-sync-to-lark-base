@@ -122,3 +122,11 @@ test('findActive returns the existing job when one is ready or claimed', async (
   assert.equal(job.status, 'claimed');
   assert.match(conn.calls[0].sql, /status IN \('ready','claimed'\)/);
 });
+
+test('findLatest returns the most recent job regardless of status', async () => {
+  const conn = fakeConnection(() => [[{ id: 5, type: 'full_sync', year: 2024, partition_no: null, payload: null, status: 'done', attempts: 0, run_after: null, created_at: null, claimed_at: null }]]);
+  const jq = createJobQueue(fakePool(conn));
+  const job = await jq.findLatest({ type: 'full_sync', year: 2024 });
+  assert.equal(job.status, 'done');
+  assert.match(conn.calls[0].sql, /ORDER BY id DESC/);
+});

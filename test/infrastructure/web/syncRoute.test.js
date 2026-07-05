@@ -37,3 +37,21 @@ test('POST /sync/full 202 with job summary', async () => {
   assert.equal(r.status, 202);
   assert.equal(r.body.jobId, 1);
 });
+
+test('GET /sync/full/status 400 when year query param missing', async () => {
+  const r = await request(appWith(), { method: 'GET', path: '/sync/full/status' });
+  assert.equal(r.status, 400);
+});
+
+test('GET /sync/full/status 200 with the use-case result', async () => {
+  const getFullSyncStatus = { execute: async ({ year }) => ({ year, jobStatus: 'claimed', jobId: 7, attempts: 0, checkpoint: null, lastRunAt: null }) };
+  const app = createApp({
+    larkAuth: passAuth,
+    baseController: { init: (_r, res) => res.status(404).end(), removePartitions: (_r, res) => res.status(404).end(), status: (_r, res) => res.status(404).end() },
+    syncController: new SyncController({ enqueueFullSync: fakeEnqueue, getFullSyncStatus }),
+  });
+  const r = await request(app, { method: 'GET', path: '/sync/full/status?year=2024' });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.jobStatus, 'claimed');
+  assert.equal(r.body.jobId, 7);
+});
