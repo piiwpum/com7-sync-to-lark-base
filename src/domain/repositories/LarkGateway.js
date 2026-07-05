@@ -4,11 +4,6 @@
  * batchCreate MUST return record ids in input order (verify in P0).
  */
 export class LarkGateway {
-  /** Provision a table with fields matching the itec schema (§10). @param {{ baseId:string, name:string, fields:object[] }} q @returns {Promise<string>} tableId */
-  async createTable(q) {
-    throw new Error('LarkGateway.createTable not implemented');
-  }
-
   /** @param {{ baseId:string, tableId:string, records:object[] }} q @returns {Promise<string[]>} record ids, input order */
   async batchCreate(q) {
     throw new Error('LarkGateway.batchCreate not implemented');

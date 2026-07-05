@@ -4,9 +4,9 @@
  */
 export class JobQueue {
   /**
-   * Enqueue a job. Designed to run inside the SAME transaction as the state
-   * write that produced it (transactional enqueue → no dual-write gap).
-   * @param {{ type:string, payload:object, runAfter?:Date }} job
+   * Enqueue a job. `year`/`partitionNo` are real job_queue columns (not just
+   * inside payload) so callers like `findActive` can filter on them directly.
+   * @param {{ type:string, year?:number, partitionNo?:number, payload:object, runAfter?:Date }} job
    */
   async enqueue(job) {
     throw new Error('JobQueue.enqueue not implemented');
@@ -21,13 +21,23 @@ export class JobQueue {
     throw new Error('JobQueue.claim not implemented');
   }
 
-  /** Mark a job done. @param {number} id */
-  async complete(id) {
+  /** Mark a job done. `payload` optionally overwrites (e.g. to scrub secrets). @param {{ id:number, payload?:object }} q */
+  async complete(q) {
     throw new Error('JobQueue.complete not implemented');
   }
 
-  /** Reschedule with backoff (attempts++, run_after). @param {{ id:number, runAfter:Date, error?:string }} q */
+  /** Mark a job permanently failed (no more retries). `payload` optionally overwrites. @param {{ id:number, payload?:object }} q */
+  async fail(q) {
+    throw new Error('JobQueue.fail not implemented');
+  }
+
+  /** Reschedule with backoff (attempts++, run_after, back to status=ready). @param {{ id:number, runAfter:Date, error?:string }} q */
   async retry(q) {
     throw new Error('JobQueue.retry not implemented');
+  }
+
+  /** Find an existing ready/claimed job for idempotent enqueue. @param {{ type:string, year:number }} q @returns {Promise<object|null>} */
+  async findActive(q) {
+    throw new Error('JobQueue.findActive not implemented');
   }
 }
