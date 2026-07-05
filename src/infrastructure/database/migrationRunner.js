@@ -11,16 +11,34 @@ export function pendingMigrations(available, applied) {
 }
 
 /**
+ * Strips `--` line comments (to end of line) before statement-splitting.
+ * Migration files document *why* above each statement, and those comments
+ * routinely contain semicolons in prose (e.g. "generalize X -> Y (params;
+ * see below)") — splitting on `;` before stripping comments would treat
+ * that prose semicolon as a statement terminator.
+ */
+function stripLineComments(sql) {
+  return sql
+    .split('\n')
+    .map((line) => {
+      const idx = line.indexOf('--');
+      return idx === -1 ? line : line.slice(0, idx);
+    })
+    .join('\n');
+}
+
+/**
  * Splits a migration file's raw SQL into individual statements on top-level
- * semicolons. Lets a single migration file contain multiple ALTER/CREATE
- * statements without needing `multipleStatements: true` on the connection
- * pool — that flag would apply to every query the pool ever runs (the app's
- * live HTTP/worker traffic included), which is unnecessary SQL-injection
- * surface for what is really just a migration-runner concern. Fine for our
- * plain DDL migrations (no stored procedures/triggers with embedded `;`).
+ * semicolons (after stripping `--` comments). Lets a single migration file
+ * contain multiple ALTER/CREATE statements without needing
+ * `multipleStatements: true` on the connection pool — that flag would apply
+ * to every query the pool ever runs (the app's live HTTP/worker traffic
+ * included), which is unnecessary SQL-injection surface for what is really
+ * just a migration-runner concern. Fine for our plain DDL migrations (no
+ * stored procedures/triggers, no string literals containing `;`).
  */
 function splitStatements(sql) {
-  return sql.split(';').map((s) => s.trim()).filter(Boolean);
+  return stripLineComments(sql).split(';').map((s) => s.trim()).filter(Boolean);
 }
 
 /**
