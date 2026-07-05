@@ -63,3 +63,22 @@ test('deleteTable retries on rate-limit code then succeeds', async () => {
   await g.deleteTable('B', 't1'); // does not throw
   assert.equal(n, 2);
 });
+
+test('batchCreate posts {fields, rows} and returns record_id_list in order', async () => {
+  let seenBody;
+  const g = gw(stub((_url, opts) => {
+    seenBody = JSON.parse(opts.body);
+    return { code: 0, data: { record_id_list: ['rec1', 'rec2'] } };
+  }));
+  const ids = await g.batchCreate({ baseId: 'B', tableId: 't1', fieldNames: ['A', 'B'], rows: [['x1', 1], ['x2', 2]] });
+  assert.deepEqual(ids, ['rec1', 'rec2']);
+  assert.deepEqual(seenBody, { fields: ['A', 'B'], rows: [['x1', 1], ['x2', 2]] });
+});
+
+test('batchCreate retries on rate-limit code then succeeds', async () => {
+  let n = 0;
+  const g = gw(stub(() => (n++ === 0 ? { code: 800004135, msg: 'limited' } : { code: 0, data: { record_id_list: ['rec1'] } })));
+  const ids = await g.batchCreate({ baseId: 'B', tableId: 't1', fieldNames: ['A'], rows: [['x1']] });
+  assert.deepEqual(ids, ['rec1']);
+  assert.equal(n, 2);
+});

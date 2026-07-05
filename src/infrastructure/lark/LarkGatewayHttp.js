@@ -84,5 +84,14 @@ export function createLarkGateway({ token, baseDomain, fetchFn = fetch, sleepFn 
     await writeCall(`/open-apis/base/v3/bases/${baseId}/tables/${tableId}/fields`, { body: field }, 'createField');
   }
 
-  return { getBase, listTables, createTable, deleteTable, listFields, createField };
+  async function batchCreate({ baseId, tableId, fieldNames, rows }) {
+    const b = await writeCall(
+      `/open-apis/base/v3/bases/${baseId}/tables/${tableId}/records/batch_create`,
+      { body: { fields: fieldNames, rows } },
+      'batchCreate',
+    );
+    return b.data.record_id_list;
+  }
+
+  return { getBase, listTables, createTable, deleteTable, listFields, createField, batchCreate };
 }
