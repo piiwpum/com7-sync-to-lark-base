@@ -132,8 +132,13 @@ Lark ไปทำ Lark Dashboard เอง
 sync_year(year PK, base_id, status);
 
 -- pointer + fill count (atomic reserve ด้วย LAST_INSERT_ID trick)
+-- first_*/last_* = boundary record ของ partition (monitoring/debug, ดูช่วง
+-- ข้อมูลที่ partition ครอบคลุมได้ทันทีโดยไม่ต้อง scan sync_mapping/Lark)
+-- เขียนโดย backfill engine (P2, ยังไม่ implement) — NULL จนกว่าจะเริ่มเขียนจริง
 sync_partition(
   year, partition_no, lark_table_id, fill_count,
+  first_lark_record_id, first_source_key, first_cr_time,
+  last_lark_record_id, last_source_key, last_cr_time,
   PRIMARY KEY (year, partition_no)
 );
 
