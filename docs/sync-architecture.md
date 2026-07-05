@@ -143,10 +143,15 @@ sync_partition(
 );
 
 -- ★ mapping ตัวใหญ่สุด (~100M rows)
+-- base_id/lark_table_id เก็บซ้ำ (denormalize) ตรงแถวเลย — hot path (flow B
+-- incremental) จะได้ไม่ต้อง JOIN sync_year/sync_partition ทุกครั้งที่จะ
+-- update/delete record บน Lark
 sync_mapping(
   year           INT,
+  base_id        VARCHAR(64),
   source_key     VARCHAR(64),   -- deriveKey(): SellBranch|SellID|RowNo(+CrTime)
   partition_no   SMALLINT,
+  lark_table_id  VARCHAR(64),
   lark_record_id VARCHAR(32),
   checksum       INT UNSIGNED,  -- crc32 จับ source เปลี่ยน
   cr_time        DATETIME,      -- ตัดปี (immutable, ค.ศ. หลังแปลง)
