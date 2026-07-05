@@ -8,7 +8,8 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "test": "node --test",
-    "migrate": "node src/infrastructure/database/migrate.js"
+    "migrate": "node src/infrastructure/database/migrate.js",
+    "worker": "node src/worker.js"
   },
   "engines": {
     "node": ">=20"

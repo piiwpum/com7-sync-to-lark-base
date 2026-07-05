@@ -11,6 +11,11 @@ import { BaseController } from './infrastructure/web/controllers/BaseController.
 import { ITEC_FIELD_SCHEMA } from './infrastructure/config/itecFieldSchema.js';
 import { PARTITION_COUNT, partitionName, parsePartitionNo } from './domain/services/partition.js';
 import { createYearRepository } from './infrastructure/database/YearRepositoryMysql.js';
+import { EnqueueFullSync } from './application/use-cases/EnqueueFullSync.js';
+import { GetFullSyncStatus } from './application/use-cases/GetFullSyncStatus.js';
+import { SyncController } from './infrastructure/web/controllers/SyncController.js';
+import { createJobQueue } from './infrastructure/database/JobQueueMysql.js';
+import { createMappingRepository } from './infrastructure/database/MappingRepositoryMysql.js';
 
 /**
  * Composition root — the ONLY place that wires concrete implementations
@@ -22,6 +27,8 @@ import { createYearRepository } from './infrastructure/database/YearRepositoryMy
 async function bootstrap() {
   const opsPool = createOpsPool(config.opsDb);
   const yearRepository = createYearRepository(opsPool);
+  const jobQueue = createJobQueue(opsPool);
+  const mappingRepository = createMappingRepository(opsPool);
 
   const tokenCache = createTokenCache({ baseDomain: config.lark.baseDomain });
   const larkAuth = makeLarkAuth({
@@ -43,7 +50,11 @@ async function bootstrap() {
     provisionYearBase, removeAllPartitions, getBaseStatus, budgetMs: config.baseInit.budgetMs,
   });
 
-  const app = createApp({ larkAuth, baseController, opsPool });
+  const enqueueFullSync = new EnqueueFullSync({ yearRepository, jobQueue });
+  const getFullSyncStatus = new GetFullSyncStatus({ jobQueue, mappingRepository });
+  const syncController = new SyncController({ enqueueFullSync, getFullSyncStatus });
+
+  const app = createApp({ larkAuth, baseController, opsPool, syncController });
 
   const server = app.listen(config.port, () => {
     console.log(`[http] listening on http://localhost:${config.port} (${config.nodeEnv})`);
