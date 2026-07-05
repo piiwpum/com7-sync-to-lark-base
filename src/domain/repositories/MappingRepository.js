@@ -41,4 +41,13 @@ export class MappingRepository {
   async setState(scope, patch) {
     throw new Error('MappingRepository.setState not implemented');
   }
+
+  /**
+   * Records the first and/or last record written into a partition
+   * (sync-architecture.md §7 / migration 006) — monitoring/debug only.
+   * @param {{ year:number, partitionNo:number, first?:{larkRecordId:string,sourceKey:string,crTime:string}, last?:{larkRecordId:string,sourceKey:string,crTime:string} }} q
+   */
+  async updatePartitionBoundary(q) {
+    throw new Error('MappingRepository.updatePartitionBoundary not implemented');
+  }
 }
