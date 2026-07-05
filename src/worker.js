@@ -22,17 +22,18 @@ async function main() {
   const opsPool = createOpsPool(config.opsDb);
   const com7Pool = createCom7Pool(config.com7Db);
 
+  const jobQueue = createJobQueue(opsPool);
+
   const runFullSyncJob = new RunFullSyncJob({
     sourceRepository: createSourceRepository(com7Pool),
     mappingRepository: createMappingRepository(opsPool),
     yearRepository: createYearRepository(opsPool),
-    jobQueue: createJobQueue(opsPool),
+    jobQueue,
     tokenCache: createTokenCache({ baseDomain: config.lark.baseDomain }),
     createGateway: createLarkGateway,
     baseDomain: config.lark.baseDomain,
     fieldNames: ITEC_FIELD_SCHEMA.map((f) => f.name),
   });
-  const jobQueue = createJobQueue(opsPool);
 
   let shuttingDown = false;
   process.on('SIGINT', () => { shuttingDown = true; });
@@ -52,7 +53,7 @@ async function main() {
         await runFullSyncJob.execute(job);
         console.log(`[worker] job ${job.id} done`);
       } catch (err) {
-        console.error(`[worker] job ${job.id} failed:`, err.message);
+        console.error(`[worker] job ${job.id} failed:`, err);
       }
     }
   }

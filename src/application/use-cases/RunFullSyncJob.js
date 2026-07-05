@@ -45,6 +45,20 @@ export class RunFullSyncJob {
       const state = await this.mappingRepository.getState(scope);
       let cursor = state?.checkpoint ?? null;
 
+      // The checkpoint (sync_state) is deliberately written LAST in this loop,
+      // after the Lark write (batchCreate) and the mapping write (saveMappings)
+      // have both completed. If the worker crashes between batchCreate
+      // succeeding and this chunk's checkpoint being saved, re-running the job
+      // will re-fetch and re-process the same chunk: it burns a second
+      // reserveSlots reservation (the crashed attempt's fill_count increment
+      // already committed, so that capacity is permanently wasted) and creates
+      // a second Lark record for the same rows (ON DUPLICATE KEY UPDATE on
+      // source_key repoints the mapping at the newer record, orphaning the
+      // first). This is a known, accepted trade-off (spec: duplicate Lark
+      // records in a narrow crash window, deferred to a future P5
+      // reconciliation phase) — do NOT "fix" it by moving the checkpoint
+      // write earlier, since that would trade rare duplicates for silently
+      // LOST rows on a crash, which is strictly worse. See docs/sync-architecture.md §10.
       for (;;) {
         const rows = await this.sourceRepository.fetchItecChunk({ year, afterCursor: cursor, limit: this.chunkSize });
         if (rows.length === 0) break;
@@ -99,8 +113,10 @@ export class RunFullSyncJob {
       await this.jobQueue.complete({ id, payload: { appId } }); // scrub appSecret
     } catch (err) {
       if (attempts >= this.maxAttempts) {
+        console.error(`[RunFullSyncJob] job ${id} attempt ${attempts}/${this.maxAttempts} -> dead:`, err);
         await this.jobQueue.fail({ id, payload: { appId } });
       } else {
+        console.error(`[RunFullSyncJob] job ${id} attempt ${attempts}/${this.maxAttempts} -> retry:`, err);
         await this.jobQueue.retry({ id, runAfter: new Date(this.now() + this.retryDelayMs) });
       }
       throw err;

@@ -7,7 +7,7 @@
  * Lives in MySQL instance B; never rebuilt by fetching from Lark (§3).
  */
 export class Mapping {
-  /** @param {{ year:number, baseId:string, sourceKey:string, partitionNo:number, larkTableId:string, larkRecordId:string, checksum:number, crTime:Date, uTime:Date }} props */
+  /** @param {{ year:number, baseId:string, sourceKey:string, partitionNo:number, larkTableId:string, larkRecordId:string, checksum:number, crTime:string, uTime:string }} props */
   constructor({ year, baseId, sourceKey, partitionNo, larkTableId, larkRecordId, checksum, crTime, uTime }) {
     this.year = year;
     this.baseId = baseId;

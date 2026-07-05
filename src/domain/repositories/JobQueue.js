@@ -31,7 +31,7 @@ export class JobQueue {
     throw new Error('JobQueue.fail not implemented');
   }
 
-  /** Reschedule with backoff (attempts++, run_after, back to status=ready). @param {{ id:number, runAfter:Date, error?:string }} q */
+  /** Reschedule with backoff (attempts++, run_after, back to status=ready). @param {{ id:number, runAfter:Date }} q */
   async retry(q) {
     throw new Error('JobQueue.retry not implemented');
   }

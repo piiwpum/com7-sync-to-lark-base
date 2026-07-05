@@ -256,6 +256,7 @@ deriveKey(row) = `${SellBranch}|${SellID}|${RowNo}`
   `BEGIN → reserve slot + insert job/pending → COMMIT` แล้ว `call Lark → BEGIN write mapping + mark done → COMMIT`;
   crash กลางทาง → recovery scan `job_queue`/pending (จุดเดียวที่อาจต้องอ่าน Lark เฉพาะ partition นั้น, เกิดยาก)
 - **Idempotency / กัน record ซ้ำ:** `batch_create` timeout แต่ Lark สร้างจริง → retry ได้ duplicate; กันด้วย write-ahead job + verify เฉพาะ partition ตอน recover
+  - ⚠️ **ผลสมทบที่เจอตอน final review ของ full-sync (P2):** ถ้า worker crash ระหว่างช่วง `batchCreate` สำเร็จ แต่ checkpoint (`sync_state`) ยังไม่ถูกบันทึก → re-run job จะ (1) สร้าง Lark record ซ้ำ **และ** (2) เผา capacity ของ partition ทิ้งถาวร เพราะ `reserveSlots` เพิ่ม `fill_count` commit ไปแล้วตั้งแต่รอบที่ crash (รอบใหม่ต้อง `reserveSlots` เพิ่มอีกชุด) — ไม่ใช่แค่ record กำพร้า (ไม่มี mapping ชี้ถึง record แรก) แต่ partition capacity ก็หายไปถาวรด้วย ไม่ใช่สิ่งที่ P2 (full-sync) ต้องแก้ — ปล่อยเป็นงานของ P5/reconciliation phase
 - **Midnight ordering (flow B/C/D):** รอบเที่ยงคืน Com7 merge+ลบ daily, flow B ยิง incremental, flow D clear daily — ต้องมี **state machine/lock ต่อปี** (MySQL `GET_LOCK()` หรือ row lock `FOR UPDATE`) freeze flow C ระหว่างหน้าต่าง midnight + นิยาม handoff C→B→D — **ยังไม่ออกแบบ**
 - **Provisioning 270 table:** สร้าง field จาก schema จริงให้เป๊ะ (ชื่อ/ชนิด) เพราะสูตร manual ผูกกับ field เหล่านี้ + แปลง พ.ศ.→ค.ศ. ตอน map datetime
 - **Capacity spill:** เพดาน 15M/ปี ถ้าเกินต้องมี "spill to secondary base" — ยังไม่ออกแบบ
