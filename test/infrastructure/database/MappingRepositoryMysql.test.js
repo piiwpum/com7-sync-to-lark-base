@@ -4,13 +4,19 @@ import { createMappingRepository } from '../../../src/infrastructure/database/Ma
 
 function fakeConnection(queryHandler) {
   const calls = [];
+  // Ordered log of every call made on this connection, including the
+  // transaction-control methods — lets tests verify not just that the
+  // right queries ran, but that beginTransaction/commit/rollback/release
+  // fired at the right points relative to them (and to each other).
+  const events = [];
   return {
     calls,
-    async query(sql, params) { calls.push({ sql, params }); return queryHandler(sql, params); },
-    async beginTransaction() {},
-    async commit() {},
-    async rollback() {},
-    release() {},
+    events,
+    async query(sql, params) { calls.push({ sql, params }); events.push({ type: 'query', sql, params }); return queryHandler(sql, params); },
+    async beginTransaction() { events.push({ type: 'beginTransaction' }); },
+    async commit() { events.push({ type: 'commit' }); },
+    async rollback() { events.push({ type: 'rollback' }); },
+    release() { events.push({ type: 'release' }); },
   };
 }
 function fakePool(connection) {
@@ -25,6 +31,12 @@ test('reserveSlots takes the whole count from one partition when it fits', async
   const repo = createMappingRepository(fakePool(conn));
   const segments = await repo.reserveSlots({ year: 2024, count: 50 });
   assert.deepEqual(segments, [{ partitionNo: 3, larkTableId: 'tbl3', startIndex: 100, count: 50 }]);
+  // Transaction hygiene: begin before the queries, commit after the UPDATE
+  // and before release, no rollback on the happy path.
+  assert.deepEqual(conn.events.map((e) => e.type), ['beginTransaction', 'query', 'query', 'commit', 'release']);
+  assert.equal(conn.events.filter((e) => e.type === 'commit').length, 1);
+  assert.equal(conn.events.filter((e) => e.type === 'rollback').length, 0);
+  assert.equal(conn.events.filter((e) => e.type === 'release').length, 1);
 });
 
 test('reserveSlots splits across two partitions when the first is nearly full', async () => {
@@ -43,12 +55,28 @@ test('reserveSlots splits across two partitions when the first is nearly full', 
     { partitionNo: 3, larkTableId: 'tbl3', startIndex: 49980, count: 20 },
     { partitionNo: 4, larkTableId: 'tbl4', startIndex: 0, count: 30 },
   ]);
+  // Two segments means two full transactions on this (reused) connection:
+  // begin/query/query/commit/release, twice, each with its own commit and
+  // release (no leaked connection, no rollback on either segment).
+  assert.deepEqual(conn.events.map((e) => e.type), [
+    'beginTransaction', 'query', 'query', 'commit', 'release',
+    'beginTransaction', 'query', 'query', 'commit', 'release',
+  ]);
+  assert.equal(conn.events.filter((e) => e.type === 'commit').length, 2);
+  assert.equal(conn.events.filter((e) => e.type === 'rollback').length, 0);
+  assert.equal(conn.events.filter((e) => e.type === 'release').length, 2);
 });
 
 test('reserveSlots throws when no partition has capacity left', async () => {
   const conn = fakeConnection((sql) => (sql.includes('SELECT') ? [[]] : [{}]));
   const repo = createMappingRepository(fakePool(conn));
   await assert.rejects(() => repo.reserveSlots({ year: 2024, count: 10 }), /no partition capacity/);
+  // The failed reservation must still roll back its transaction and
+  // release the connection (no leak), and must never commit.
+  assert.deepEqual(conn.events.map((e) => e.type), ['beginTransaction', 'query', 'rollback', 'release']);
+  assert.equal(conn.events.filter((e) => e.type === 'commit').length, 0);
+  assert.equal(conn.events.filter((e) => e.type === 'rollback').length, 1);
+  assert.equal(conn.events.filter((e) => e.type === 'release').length, 1);
 });
 
 test('saveMappings is a no-op for an empty list', async () => {
