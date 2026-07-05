@@ -3,8 +3,10 @@ import { LarkAuthError } from '../../../domain/errors.js';
 /**
  * Reads Lark app credentials from request headers, exchanges them for a
  * (cached) tenant token, and attaches a request-scoped LarkGateway as
- * `req.larkGateway`. Missing headers or a failed exchange → 401. The
- * app_secret is never logged.
+ * `req.larkGateway`, plus the raw `req.larkAppId`/`req.larkAppSecret` (some
+ * routes, e.g. POST /sync/full, need the raw credentials to hand to a
+ * background worker that must keep refreshing its own token later).
+ * Missing headers or a failed exchange → 401. The app_secret is never logged.
  */
 export function larkAuth({ tokenCache, createGateway, baseDomain }) {
   return async function larkAuthMiddleware(req, res, next) {
@@ -16,6 +18,8 @@ export function larkAuth({ tokenCache, createGateway, baseDomain }) {
     try {
       const token = await tokenCache.getToken(appId, appSecret);
       req.larkGateway = createGateway({ token, baseDomain });
+      req.larkAppId = appId;
+      req.larkAppSecret = appSecret;
       next();
     } catch (err) {
       if (err instanceof LarkAuthError) {

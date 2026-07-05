@@ -36,3 +36,15 @@ test('401 on LarkAuthError', async () => {
   await mw({ headers: { 'x-lark-app-id': 'a', 'x-lark-app-secret': 's' } }, r, () => assert.fail());
   assert.equal(r.code, 401);
 });
+
+test('attaches req.larkAppId and req.larkAppSecret alongside the gateway', async () => {
+  const mw = larkAuth({
+    tokenCache: { getToken: async () => 't-ok' },
+    createGateway: ({ token }) => ({ token }),
+    baseDomain: 'x',
+  });
+  const req = { headers: { 'x-lark-app-id': 'app-1', 'x-lark-app-secret': 'sec-1' } };
+  await mw(req, res(), () => {});
+  assert.equal(req.larkAppId, 'app-1');
+  assert.equal(req.larkAppSecret, 'sec-1');
+});
