@@ -80,4 +80,16 @@ export class MappingRepository {
   async setFillCount(q) {
     throw new Error('MappingRepository.setFillCount not implemented');
   }
+
+  /**
+   * The partition `reserveSlots` would target next (lowest partition_no
+   * with fill_count below capacity), read-only — lets a caller self-heal
+   * a phantom reservation (crash after reserveSlots committed but before
+   * batchCreate wrote the records, §10) before reserving more on top of it.
+   * @param {{ year:number }} q
+   * @returns {Promise<{ partitionNo:number, larkTableId:string, fillCount:number }|null>}
+   */
+  async getOpenPartition(q) {
+    throw new Error('MappingRepository.getOpenPartition not implemented');
+  }
 }

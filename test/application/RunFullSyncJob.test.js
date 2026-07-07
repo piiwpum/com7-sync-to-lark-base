@@ -9,11 +9,15 @@ function row(sellId, rowNo, crTimeBE = '2569-01-01 00:00:00') {
   return { CrTime: crTimeBE, UTime: crTimeBE, SellID: sellId, SellBranch: 114, RowNo: rowNo, Product: 'P1' };
 }
 
-function makeDeps({ chunks, reserveSlotsImpl, batchCreateImpl, initialCheckpoint = null } = {}) {
+function makeDeps({
+  chunks, reserveSlotsImpl, batchCreateImpl, initialCheckpoint = null,
+  openPartition = null, countRecordsImpl, setFillCountImpl,
+} = {}) {
   let chunkIndex = 0;
   const savedMappings = [];
   const stateWrites = [];
   const boundaryWrites = [];
+  const fillCountWrites = [];
   const jobQueueCalls = { complete: [], fail: [], retry: [] };
   const tokenCalls = [];
 
@@ -27,6 +31,8 @@ function makeDeps({ chunks, reserveSlotsImpl, batchCreateImpl, initialCheckpoint
       async saveMappings(mappings) { savedMappings.push(...mappings); },
       async setState(scope, patch) { stateWrites.push({ scope, patch }); },
       async updatePartitionBoundary(q) { boundaryWrites.push(q); },
+      async getOpenPartition() { return openPartition; },
+      async setFillCount(q) { fillCountWrites.push(q); if (setFillCountImpl) await setFillCountImpl(q); },
     },
     yearRepository: { async getYear() { return { year: 2024, baseId: 'BASE1', status: 'complete' }; } },
     jobQueue: {
@@ -35,13 +41,16 @@ function makeDeps({ chunks, reserveSlotsImpl, batchCreateImpl, initialCheckpoint
       async retry(q) { jobQueueCalls.retry.push(q); },
     },
     tokenCache: { async getToken(appId, appSecret) { tokenCalls.push({ appId, appSecret }); return 'tok'; } },
-    createGateway: () => ({ batchCreate: batchCreateImpl ?? (async ({ records }) => records.map((_r, i) => `rec${i}`)) }),
+    createGateway: () => ({
+      batchCreate: batchCreateImpl ?? (async ({ records }) => records.map((_r, i) => `rec${i}`)),
+      countRecords: countRecordsImpl ?? (async () => { throw new Error('countRecords should not be called when there is no open partition'); }),
+    }),
     baseDomain: 'https://x',
     chunkSize: 200,
     maxAttempts: 5,
     retryDelayMs: 60000,
     now: () => Date.parse('2026-07-03T10:00:00Z'),
-    _inspect: { savedMappings, stateWrites, boundaryWrites, jobQueueCalls, tokenCalls },
+    _inspect: { savedMappings, stateWrites, boundaryWrites, fillCountWrites, jobQueueCalls, tokenCalls },
   };
 }
 
@@ -138,6 +147,54 @@ test('on error with attempts below max: reschedules via retry (not dead)', async
   await assert.rejects(() => uc.execute({ id: 1, year: 2024, attempts: 1, payload: { appId: 'a', appSecret: 's' } }));
   assert.equal(deps._inspect.jobQueueCalls.retry.length, 1);
   assert.equal(deps._inspect.jobQueueCalls.fail.length, 0);
+});
+
+test('self-heal: corrects fill_count down before the chunk loop when it exceeds the real Lark count', async () => {
+  // Simulates resuming after a crash: reserveSlots committed fill_count for
+  // a chunk whose batchCreate never actually ran, so Lark has fewer real
+  // records than the partition's fill_count claims.
+  const deps = makeDeps({
+    chunks: [[row(1, 1)]],
+    openPartition: { partitionNo: 3, larkTableId: 'tbl3', fillCount: 500 },
+    countRecordsImpl: async () => 480,
+  });
+  const uc = new RunFullSyncJob(deps);
+  await uc.execute({ id: 1, year: 2024, attempts: 0, payload: { appId: 'a', appSecret: 's' } });
+  assert.deepEqual(deps._inspect.fillCountWrites, [{ year: 2024, partitionNo: 3, fillCount: 480 }]);
+});
+
+test('self-heal: does nothing when the open partition already matches the real Lark count', async () => {
+  const deps = makeDeps({
+    chunks: [[row(1, 1)]],
+    openPartition: { partitionNo: 3, larkTableId: 'tbl3', fillCount: 500 },
+    countRecordsImpl: async () => 500,
+  });
+  const uc = new RunFullSyncJob(deps);
+  await uc.execute({ id: 1, year: 2024, attempts: 0, payload: { appId: 'a', appSecret: 's' } });
+  assert.deepEqual(deps._inspect.fillCountWrites, []);
+});
+
+test('self-heal: never corrects upward, even if the real Lark count is somehow higher', async () => {
+  // An excess-record case is a different problem (real orphan on Lark) for
+  // check/heal to catch — RunFullSyncJob must not paper over it here.
+  const deps = makeDeps({
+    chunks: [[row(1, 1)]],
+    openPartition: { partitionNo: 3, larkTableId: 'tbl3', fillCount: 500 },
+    countRecordsImpl: async () => 600,
+  });
+  const uc = new RunFullSyncJob(deps);
+  await uc.execute({ id: 1, year: 2024, attempts: 0, payload: { appId: 'a', appSecret: 's' } });
+  assert.deepEqual(deps._inspect.fillCountWrites, []);
+});
+
+test('self-heal: skipped entirely (no countRecords call) when every partition is already full', async () => {
+  // openPartition defaults to null in makeDeps, and its fake gateway.countRecords
+  // throws if called — this test would fail loudly if the self-heal step
+  // ever called it despite there being no open partition.
+  const deps = makeDeps({ chunks: [[row(1, 1)]] });
+  const uc = new RunFullSyncJob(deps);
+  await uc.execute({ id: 1, year: 2024, attempts: 0, payload: { appId: 'a', appSecret: 's' } }); // does not throw
+  assert.deepEqual(deps._inspect.fillCountWrites, []);
 });
 
 test('on error with attempts at max: marks the job dead and scrubs the secret', async () => {

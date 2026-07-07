@@ -9,8 +9,10 @@ import { Mapping } from '../../domain/entities/Mapping.js';
  * Runs one full-sync (backfill) job to completion: loops chunks of
  * `chunkSize` rows from Com7, reserves partition slots, batch-creates into
  * Lark, writes sync_mapping, and checkpoints sync_state after every chunk
- * (spec §3). A fresh Lark token is fetched per chunk via `tokenCache` (which
- * only re-exchanges near expiry) so the job can run for hours. On an
+ * (spec §3). Before that loop, self-heals a phantom partition reservation
+ * left by a previous crash (see the comment above `getOpenPartition` below).
+ * A fresh Lark token is fetched per chunk via `tokenCache` (which only
+ * re-exchanges near expiry) so the job can run for hours. On an
  * unrecoverable error: retries with backoff below `maxAttempts`, else marks
  * the job permanently dead. Either way the app_secret is scrubbed from the
  * job's payload — it's only meaningful while the job is actively running.
@@ -41,6 +43,28 @@ export class RunFullSyncJob {
 
     try {
       const { baseId } = await this.yearRepository.getYear(year);
+
+      // Self-heal a phantom reservation from a previous crash before
+      // reserving more on top of it: reserveSlots commits its fill_count
+      // increment before batchCreate ever runs (§10), so if a prior attempt
+      // crashed in between, the partition it was filling has more reserved
+      // capacity than Lark actually holds. Checked once per execute() (not
+      // per chunk) — only the partition open for the *next* reservation can
+      // possibly be affected; every earlier partition is already closed and
+      // correct. Harmless/idempotent on a clean run (real count already
+      // matches). Only ever corrects fill_count DOWN to the real Lark
+      // count — never up, since an excess-record case is a different
+      // problem for GET /sync/full/check + POST /sync/full/heal to catch.
+      const openPartition = await this.mappingRepository.getOpenPartition({ year });
+      if (openPartition) {
+        const healToken = await this.tokenCache.getToken(appId, appSecret);
+        const healGateway = this.createGateway({ token: healToken, baseDomain: this.baseDomain });
+        const larkTotal = await healGateway.countRecords({ baseId, tableId: openPartition.larkTableId });
+        if (larkTotal < openPartition.fillCount) {
+          await this.mappingRepository.setFillCount({ year, partitionNo: openPartition.partitionNo, fillCount: larkTotal });
+        }
+      }
+
       const state = await this.mappingRepository.getState(scope);
       let cursor = state?.checkpoint ?? null;
 

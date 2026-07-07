@@ -198,3 +198,19 @@ test('setFillCount updates sync_partition.fill_count directly', async () => {
   assert.match(conn.calls[0].sql, /UPDATE sync_partition SET fill_count\s*=\s*\?/);
   assert.deepEqual(conn.calls[0].params, [49800, 2024, 10]);
 });
+
+test('getOpenPartition returns the lowest-numbered partition with spare capacity', async () => {
+  const conn = fakeConnection(() => [[{ partition_no: 4, lark_table_id: 'tbl4', fill_count: 12345 }]]);
+  const repo = createMappingRepository(fakePool(conn));
+  const open = await repo.getOpenPartition({ year: 2024 });
+  assert.match(conn.calls[0].sql, /fill_count < \?/);
+  assert.match(conn.calls[0].sql, /ORDER BY partition_no LIMIT 1/);
+  assert.deepEqual(conn.calls[0].params, [2024, 50000]);
+  assert.deepEqual(open, { partitionNo: 4, larkTableId: 'tbl4', fillCount: 12345 });
+});
+
+test('getOpenPartition returns null when every partition is at capacity', async () => {
+  const conn = fakeConnection(() => [[]]);
+  const repo = createMappingRepository(fakePool(conn));
+  assert.equal(await repo.getOpenPartition({ year: 2024 }), null);
+});

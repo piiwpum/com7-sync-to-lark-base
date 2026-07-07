@@ -136,8 +136,19 @@ export function createMappingRepository(pool) {
     );
   }
 
+  /** Read-only peek at the partition reserveSlots would target next (§10). */
+  async function getOpenPartition({ year }) {
+    const [rows] = await pool.query(
+      'SELECT partition_no, lark_table_id, fill_count FROM sync_partition WHERE year=? AND fill_count < ? ORDER BY partition_no LIMIT 1',
+      [year, PARTITION_CAPACITY],
+    );
+    if (rows.length === 0) return null;
+    const r = rows[0];
+    return { partitionNo: r.partition_no, larkTableId: r.lark_table_id, fillCount: r.fill_count };
+  }
+
   return {
     reserveSlots, saveMappings, getState, setState, updatePartitionBoundary,
-    listPartitions, getMappingsForPartition, setFillCount,
+    listPartitions, getMappingsForPartition, setFillCount, getOpenPartition,
   };
 }
