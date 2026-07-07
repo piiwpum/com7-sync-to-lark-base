@@ -110,5 +110,34 @@ export function createMappingRepository(pool) {
     await pool.query(`UPDATE sync_partition SET ${sets.join(', ')} WHERE year=? AND partition_no=?`, params);
   }
 
-  return { reserveSlots, saveMappings, getState, setState, updatePartitionBoundary };
+  /** Every partition provisioned for a year, in partition_no order — drives the reconcile check/heal loop (§9). */
+  async function listPartitions({ year }) {
+    const [rows] = await pool.query(
+      'SELECT partition_no, lark_table_id, fill_count FROM sync_partition WHERE year=? ORDER BY partition_no',
+      [year],
+    );
+    return rows.map((r) => ({ partitionNo: r.partition_no, larkTableId: r.lark_table_id, fillCount: r.fill_count }));
+  }
+
+  /** Every mapping row for one partition — reconcile L3 diff (§9). */
+  async function getMappingsForPartition({ year, partitionNo }) {
+    const [rows] = await pool.query(
+      'SELECT source_key, lark_record_id FROM sync_mapping WHERE year=? AND partition_no=?',
+      [year, partitionNo],
+    );
+    return rows.map((r) => ({ sourceKey: r.source_key, larkRecordId: r.lark_record_id }));
+  }
+
+  /** Directly correct fill_count after reconciliation (§9/§10) — not for normal reservation. */
+  async function setFillCount({ year, partitionNo, fillCount }) {
+    await pool.query(
+      'UPDATE sync_partition SET fill_count=? WHERE year=? AND partition_no=?',
+      [fillCount, year, partitionNo],
+    );
+  }
+
+  return {
+    reserveSlots, saveMappings, getState, setState, updatePartitionBoundary,
+    listPartitions, getMappingsForPartition, setFillCount,
+  };
 }

@@ -14,14 +14,25 @@ export class LarkGateway {
     throw new Error('LarkGateway.batchUpdate not implemented');
   }
 
-  /** @param {{ baseId:string, tableId:string, recordIds:string[] }} q */
+  /** Delete up to 500 records per call (bitable/v1 cap). @param {{ baseId:string, tableId:string, recordIds:string[] }} q */
   async batchDelete(q) {
     throw new Error('LarkGateway.batchDelete not implemented');
   }
 
-  /** Total record count of a table — reconcile L1 (§9). @param {{ baseId:string, tableId:string }} q @returns {Promise<number>} */
+  /** Total record count of a table — reconcile L1 (§9). Cheap: 1 API call regardless of table size. @param {{ baseId:string, tableId:string }} q @returns {Promise<number>} */
   async countRecords(q) {
     throw new Error('LarkGateway.countRecords not implemented');
+  }
+
+  /**
+   * List every record id physically present in a table — reconciliation L3
+   * deep-verify ONLY (§9). NEVER call this from the regular sync path (§3) —
+   * it exists purely to diff against `sync_mapping` when `countRecords`
+   * already showed a mismatch.
+   * @param {{ baseId:string, tableId:string }} q @returns {Promise<string[]>} record ids
+   */
+  async listRecordIds(q) {
+    throw new Error('LarkGateway.listRecordIds not implemented');
   }
 
   /** Resolve if base exists/accessible; throw BaseNotFoundError otherwise. @param {string} baseId */

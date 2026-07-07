@@ -50,4 +50,34 @@ export class MappingRepository {
   async updatePartitionBoundary(q) {
     throw new Error('MappingRepository.updatePartitionBoundary not implemented');
   }
+
+  /**
+   * Every partition provisioned for a year, in partition_no order — drives
+   * the reconciliation check/heal loop (§9).
+   * @param {{ year:number }} q
+   * @returns {Promise<{ partitionNo:number, larkTableId:string, fillCount:number }[]>}
+   */
+  async listPartitions(q) {
+    throw new Error('MappingRepository.listPartitions not implemented');
+  }
+
+  /**
+   * Every mapping row for one partition — reconcile L3 diff (§9): compare
+   * against the table's real Lark record ids to find missing/excess.
+   * @param {{ year:number, partitionNo:number }} q
+   * @returns {Promise<{ sourceKey:string, larkRecordId:string }[]>}
+   */
+  async getMappingsForPartition(q) {
+    throw new Error('MappingRepository.getMappingsForPartition not implemented');
+  }
+
+  /**
+   * Directly correct a partition's fill_count after reconciliation finds it
+   * drifted from the real mapped/record count (§9/§10) — NOT for normal
+   * reservation (use reserveSlots for that).
+   * @param {{ year:number, partitionNo:number, fillCount:number }} q
+   */
+  async setFillCount(q) {
+    throw new Error('MappingRepository.setFillCount not implemented');
+  }
 }

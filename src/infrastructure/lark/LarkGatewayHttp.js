@@ -1,7 +1,7 @@
 import { BaseNotFoundError } from '../../domain/errors.js';
 
 const BASE_NOT_FOUND = 91402;
-const RATE_LIMIT_CODES = new Set([1254291, 800004135]); // concurrent-write / method-limited
+const RATE_LIMIT_CODES = new Set([1254291, 800004135, 1254290]); // concurrent-write / method-limited / too-many-requests (v1)
 const defaultSleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
@@ -84,14 +84,48 @@ export function createLarkGateway({ token, baseDomain, fetchFn = fetch, sleepFn 
     await writeCall(`/open-apis/base/v3/bases/${baseId}/tables/${tableId}/fields`, { body: field }, 'createField');
   }
 
-  async function batchCreate({ baseId, tableId, fieldNames, rows }) {
+  // bitable/v1 (not base/v3): confirmed live cap of 1,000 records/call (v3 caps
+  // at 200) with record ordering preserved (0 mismatch across 1,000 records).
+  async function batchCreate({ baseId, tableId, records }) {
     const b = await writeCall(
-      `/open-apis/base/v3/bases/${baseId}/tables/${tableId}/records/batch_create`,
-      { body: { fields: fieldNames, rows } },
+      `/open-apis/bitable/v1/apps/${baseId}/tables/${tableId}/records/batch_create`,
+      { body: { records: records.map((fields) => ({ fields })) } },
       'batchCreate',
     );
-    return b.data.record_id_list;
+    return b.data.records.map((r) => r.record_id);
   }
 
-  return { getBase, listTables, createTable, deleteTable, listFields, createField, batchCreate };
+  // bitable/v1 list-records' `data.total` is populated even with page_size=1,
+  // so this is a single cheap call regardless of table size — reconcile L1 (§9).
+  async function countRecords({ baseId, tableId }) {
+    const b = await call(`/open-apis/bitable/v1/apps/${baseId}/tables/${tableId}/records?page_size=1`);
+    if (b.code !== 0) throw fail('countRecords', b);
+    return b.data.total;
+  }
+
+  // reconcile L3 deep-verify ONLY (§9) — NEVER call from the regular sync path.
+  async function listRecordIds({ baseId, tableId }) {
+    const out = [];
+    let pageToken;
+    do {
+      const qs = new URLSearchParams({ page_size: '500', ...(pageToken ? { page_token: pageToken } : {}) });
+      const b = await call(`/open-apis/bitable/v1/apps/${baseId}/tables/${tableId}/records?${qs}`);
+      if (b.code !== 0) throw fail('listRecordIds', b);
+      for (const item of b.data.items ?? []) out.push(item.record_id);
+      pageToken = b.data.has_more ? b.data.page_token : undefined;
+    } while (pageToken);
+    return out;
+  }
+
+  // bitable/v1: confirmed cap of 500 record ids/call (caller must chunk).
+  async function batchDelete({ baseId, tableId, recordIds }) {
+    const b = await writeCall(
+      `/open-apis/bitable/v1/apps/${baseId}/tables/${tableId}/records/batch_delete`,
+      { body: { records: recordIds } },
+      'batchDelete',
+    );
+    return b.data.records.map((r) => r.record_id);
+  }
+
+  return { getBase, listTables, createTable, deleteTable, listFields, createField, batchCreate, countRecords, listRecordIds, batchDelete };
 }

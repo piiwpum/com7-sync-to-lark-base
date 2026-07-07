@@ -18,8 +18,8 @@ import { Mapping } from '../../domain/entities/Mapping.js';
 export class RunFullSyncJob {
   constructor({
     sourceRepository, mappingRepository, yearRepository, jobQueue,
-    tokenCache, createGateway, baseDomain, fieldNames,
-    chunkSize = 200, maxAttempts = 5, retryDelayMs = 60000, now = Date.now,
+    tokenCache, createGateway, baseDomain,
+    chunkSize = 1000, maxAttempts = 5, retryDelayMs = 60000, now = Date.now,
   }) {
     this.sourceRepository = sourceRepository;
     this.mappingRepository = mappingRepository;
@@ -28,7 +28,6 @@ export class RunFullSyncJob {
     this.tokenCache = tokenCache;
     this.createGateway = createGateway;
     this.baseDomain = baseDomain;
-    this.fieldNames = fieldNames;
     this.chunkSize = chunkSize;
     this.maxAttempts = maxAttempts;
     this.retryDelayMs = retryDelayMs;
@@ -75,9 +74,8 @@ export class RunFullSyncJob {
         let offset = 0;
         for (const seg of segments) {
           const segTransformed = transformedRows.slice(offset, offset + seg.count);
-          const larkRows = segTransformed.map((t) => this.fieldNames.map((f) => t[f]));
           const recordIds = await gateway.batchCreate({
-            baseId, tableId: seg.larkTableId, fieldNames: this.fieldNames, rows: larkRows,
+            baseId, tableId: seg.larkTableId, records: segTransformed,
           });
           for (let i = 0; i < recordIds.length; i++) {
             const idx = offset + i;

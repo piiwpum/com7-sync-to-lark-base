@@ -31,4 +31,15 @@ export class SourceRepository {
   async countItec(year) {
     throw new Error('SourceRepository.countItec not implemented');
   }
+
+  /**
+   * Point lookup by identity key — reconcile L3 heal (§9), to re-fetch a
+   * specific row whose Lark record was lost. NOT for bulk scans (use
+   * fetchItecChunk for those).
+   * @param {{ sourceKeys:string[] }} q — each key is `deriveKey()`'s output
+   * @returns {Promise<object[]>} raw rows, DB column names as keys
+   */
+  async fetchBySourceKeys(q) {
+    throw new Error('SourceRepository.fetchBySourceKeys not implemented');
+  }
 }

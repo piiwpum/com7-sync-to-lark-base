@@ -5,8 +5,6 @@ import { RunFullSyncJob } from '../../src/application/use-cases/RunFullSyncJob.j
 import { crc32 } from '../../src/domain/services/checksum.js';
 import { transformItecRow } from '../../src/domain/services/transformItecRow.js';
 
-const FIELD_NAMES = ['CrTime', 'SellID', 'SellBranch', 'Product'];
-
 function row(sellId, rowNo, crTimeBE = '2569-01-01 00:00:00') {
   return { CrTime: crTimeBE, UTime: crTimeBE, SellID: sellId, SellBranch: 114, RowNo: rowNo, Product: 'P1' };
 }
@@ -37,9 +35,8 @@ function makeDeps({ chunks, reserveSlotsImpl, batchCreateImpl, initialCheckpoint
       async retry(q) { jobQueueCalls.retry.push(q); },
     },
     tokenCache: { async getToken(appId, appSecret) { tokenCalls.push({ appId, appSecret }); return 'tok'; } },
-    createGateway: () => ({ batchCreate: batchCreateImpl ?? (async ({ rows }) => rows.map((_r, i) => `rec${i}`)) }),
+    createGateway: () => ({ batchCreate: batchCreateImpl ?? (async ({ records }) => records.map((_r, i) => `rec${i}`)) }),
     baseDomain: 'https://x',
-    fieldNames: FIELD_NAMES,
     chunkSize: 200,
     maxAttempts: 5,
     retryDelayMs: 60000,
@@ -104,7 +101,7 @@ test('splits a chunk across two reserved segments into two batchCreate calls', a
       { partitionNo: 1, larkTableId: 'tbl1', startIndex: 49998, count: 2 },
       { partitionNo: 2, larkTableId: 'tbl2', startIndex: 0, count: 1 },
     ],
-    batchCreateImpl: async ({ tableId, rows }) => { calls.push({ tableId, n: rows.length }); return rows.map((_r, i) => `${tableId}-rec${i}`); },
+    batchCreateImpl: async ({ tableId, records }) => { calls.push({ tableId, n: records.length }); return records.map((_r, i) => `${tableId}-rec${i}`); },
   });
   const uc = new RunFullSyncJob(deps);
   await uc.execute({ id: 1, year: 2024, attempts: 0, payload: { appId: 'a', appSecret: 's' } });

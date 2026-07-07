@@ -161,3 +161,40 @@ test('updatePartitionBoundary sets both when a segment is both the first and onl
   assert.match(conn.calls[0].sql, /first_lark_record_id\s*=\s*\?/);
   assert.match(conn.calls[0].sql, /last_lark_record_id\s*=\s*\?/);
 });
+
+test('listPartitions returns every partition for a year, ordered, camelCased', async () => {
+  const conn = fakeConnection(() => [[
+    { partition_no: 1, lark_table_id: 'tbl1', fill_count: 50000 },
+    { partition_no: 2, lark_table_id: 'tbl2', fill_count: 12345 },
+  ]]);
+  const repo = createMappingRepository(fakePool(conn));
+  const partitions = await repo.listPartitions({ year: 2024 });
+  assert.match(conn.calls[0].sql, /ORDER BY partition_no/);
+  assert.deepEqual(conn.calls[0].params, [2024]);
+  assert.deepEqual(partitions, [
+    { partitionNo: 1, larkTableId: 'tbl1', fillCount: 50000 },
+    { partitionNo: 2, larkTableId: 'tbl2', fillCount: 12345 },
+  ]);
+});
+
+test('getMappingsForPartition returns source_key/lark_record_id pairs for one partition', async () => {
+  const conn = fakeConnection(() => [[
+    { source_key: '114|1|1', lark_record_id: 'rec1' },
+    { source_key: '114|1|2', lark_record_id: 'rec2' },
+  ]]);
+  const repo = createMappingRepository(fakePool(conn));
+  const mappings = await repo.getMappingsForPartition({ year: 2024, partitionNo: 10 });
+  assert.deepEqual(conn.calls[0].params, [2024, 10]);
+  assert.deepEqual(mappings, [
+    { sourceKey: '114|1|1', larkRecordId: 'rec1' },
+    { sourceKey: '114|1|2', larkRecordId: 'rec2' },
+  ]);
+});
+
+test('setFillCount updates sync_partition.fill_count directly', async () => {
+  const conn = fakeConnection(() => [{}]);
+  const repo = createMappingRepository(fakePool(conn));
+  await repo.setFillCount({ year: 2024, partitionNo: 10, fillCount: 49800 });
+  assert.match(conn.calls[0].sql, /UPDATE sync_partition SET fill_count\s*=\s*\?/);
+  assert.deepEqual(conn.calls[0].params, [49800, 2024, 10]);
+});

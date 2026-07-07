@@ -1,9 +1,14 @@
 import { YearNotProvisionedError } from '../../../domain/errors.js';
 
+const DEFAULT_BUDGET_MS = 600000; // soft time budget per call; override via config/env
+
 export class SyncController {
-  constructor({ enqueueFullSync, getFullSyncStatus }) {
+  constructor({ enqueueFullSync, getFullSyncStatus, checkFullSync, healFullSync, budgetMs = DEFAULT_BUDGET_MS }) {
     this.enqueueFullSync = enqueueFullSync;
     this.getFullSyncStatus = getFullSyncStatus;
+    this.checkFullSync = checkFullSync;
+    this.healFullSync = healFullSync;
+    this.budgetMs = budgetMs;
   }
 
   init = async (req, res, next) => {
@@ -29,6 +34,34 @@ export class SyncController {
       const summary = await this.getFullSyncStatus.execute({ year });
       res.status(200).json(summary);
     } catch (err) {
+      next(err);
+    }
+  };
+
+  check = async (req, res, next) => {
+    const year = Number(req.query.year);
+    if (!Number.isInteger(year)) {
+      return res.status(400).json({ error: 'year query param is required and must be an integer' });
+    }
+    try {
+      const summary = await this.checkFullSync.execute({ gateway: req.larkGateway, year, budgetMs: this.budgetMs });
+      res.status(200).json(summary);
+    } catch (err) {
+      if (err instanceof YearNotProvisionedError) return res.status(404).json({ error: err.message });
+      next(err);
+    }
+  };
+
+  heal = async (req, res, next) => {
+    const year = req.body?.year;
+    if (!Number.isInteger(year)) {
+      return res.status(400).json({ error: 'year must be an integer year (CE)' });
+    }
+    try {
+      const summary = await this.healFullSync.execute({ gateway: req.larkGateway, year, budgetMs: this.budgetMs });
+      res.status(200).json(summary);
+    } catch (err) {
+      if (err instanceof YearNotProvisionedError) return res.status(404).json({ error: err.message });
       next(err);
     }
   };

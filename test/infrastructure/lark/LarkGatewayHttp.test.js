@@ -64,21 +64,60 @@ test('deleteTable retries on rate-limit code then succeeds', async () => {
   assert.equal(n, 2);
 });
 
-test('batchCreate posts {fields, rows} and returns record_id_list in order', async () => {
-  let seenBody;
-  const g = gw(stub((_url, opts) => {
+test('batchCreate posts bitable/v1 {records:[{fields}]} and returns record_ids in order', async () => {
+  let seenUrl, seenBody;
+  const g = gw(stub((url, opts) => {
+    seenUrl = url;
     seenBody = JSON.parse(opts.body);
-    return { code: 0, data: { record_id_list: ['rec1', 'rec2'] } };
+    return { code: 0, data: { records: [{ record_id: 'rec1', fields: { A: 'x1', B: 1 } }, { record_id: 'rec2', fields: { A: 'x2', B: 2 } }] } };
   }));
-  const ids = await g.batchCreate({ baseId: 'B', tableId: 't1', fieldNames: ['A', 'B'], rows: [['x1', 1], ['x2', 2]] });
+  const ids = await g.batchCreate({ baseId: 'B', tableId: 't1', records: [{ A: 'x1', B: 1 }, { A: 'x2', B: 2 }] });
   assert.deepEqual(ids, ['rec1', 'rec2']);
-  assert.deepEqual(seenBody, { fields: ['A', 'B'], rows: [['x1', 1], ['x2', 2]] });
+  assert.match(seenUrl, /\/open-apis\/bitable\/v1\/apps\/B\/tables\/t1\/records\/batch_create$/);
+  assert.deepEqual(seenBody, { records: [{ fields: { A: 'x1', B: 1 } }, { fields: { A: 'x2', B: 2 } }] });
 });
 
 test('batchCreate retries on rate-limit code then succeeds', async () => {
   let n = 0;
-  const g = gw(stub(() => (n++ === 0 ? { code: 800004135, msg: 'limited' } : { code: 0, data: { record_id_list: ['rec1'] } })));
-  const ids = await g.batchCreate({ baseId: 'B', tableId: 't1', fieldNames: ['A'], rows: [['x1']] });
+  const g = gw(stub(() => (n++ === 0 ? { code: 1254290, msg: 'too many requests' } : { code: 0, data: { records: [{ record_id: 'rec1', fields: { A: 'x1' } }] } })));
+  const ids = await g.batchCreate({ baseId: 'B', tableId: 't1', records: [{ A: 'x1' }] });
   assert.deepEqual(ids, ['rec1']);
+  assert.equal(n, 2);
+});
+
+test('countRecords hits bitable/v1 with page_size=1 and returns data.total', async () => {
+  let seenUrl;
+  const g = gw(stub((url) => { seenUrl = url; return { code: 0, data: { total: 49800, items: [{}], has_more: true } }; }));
+  const total = await g.countRecords({ baseId: 'B', tableId: 't1' });
+  assert.equal(total, 49800);
+  assert.match(seenUrl, /\/open-apis\/bitable\/v1\/apps\/B\/tables\/t1\/records\?page_size=1$/);
+});
+
+test('listRecordIds (bitable/v1) aggregates pages of record_id', async () => {
+  let page = 0;
+  const g = gw(stub(() => (page++ === 0
+    ? { code: 0, data: { items: [{ record_id: 'r1' }, { record_id: 'r2' }], has_more: true, page_token: 'p2' } }
+    : { code: 0, data: { items: [{ record_id: 'r3' }], has_more: false } })));
+  assert.deepEqual(await g.listRecordIds({ baseId: 'B', tableId: 't1' }), ['r1', 'r2', 'r3']);
+});
+
+test('batchDelete posts bitable/v1 {records:[ids]} and returns deleted record_ids', async () => {
+  let seenUrl, seenBody;
+  const g = gw(stub((url, opts) => {
+    seenUrl = url;
+    seenBody = JSON.parse(opts.body);
+    return { code: 0, data: { records: [{ deleted: true, record_id: 'r1' }, { deleted: true, record_id: 'r2' }] } };
+  }));
+  const ids = await g.batchDelete({ baseId: 'B', tableId: 't1', recordIds: ['r1', 'r2'] });
+  assert.deepEqual(ids, ['r1', 'r2']);
+  assert.match(seenUrl, /\/open-apis\/bitable\/v1\/apps\/B\/tables\/t1\/records\/batch_delete$/);
+  assert.deepEqual(seenBody, { records: ['r1', 'r2'] });
+});
+
+test('batchDelete retries on rate-limit code then succeeds', async () => {
+  let n = 0;
+  const g = gw(stub(() => (n++ === 0 ? { code: 1254291, msg: 'concurrent' } : { code: 0, data: { records: [{ deleted: true, record_id: 'r1' }] } })));
+  const ids = await g.batchDelete({ baseId: 'B', tableId: 't1', recordIds: ['r1'] });
+  assert.deepEqual(ids, ['r1']);
   assert.equal(n, 2);
 });

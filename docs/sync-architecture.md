@@ -75,6 +75,21 @@ Lark ไปทำ Lark Dashboard เอง
 - **ทางเร่ง = multi-app sharding** (limit เป็น per-app → N app หมุนเขียน ≈ N×189) หรือขอ quota tier สูงจาก Lark
 - แต่ละ app ในพูลต้องถูกแชร์เข้าทุก base ที่จะเขียน
 
+### 3.2 Full sync v2 (2026-07-06): ย้าย batchCreate จาก base/v3 → bitable/v1
+
+`§3.1` วัดจาก endpoint **`base/v3/bases/.../records/batch_create`** เท่านั้น — cap 200 เป็นข้อจำกัดของ endpoint นั้นโดยเฉพาะ ไม่ใช่ข้อจำกัดของ Lark ทั้งระบบ ยืนยันแล้วว่า endpoint **`bitable/v1/apps/.../records/batch_create`** (คนละตัวกัน, คนละ body format) ให้ throughput สูงกว่ามาก:
+
+| เรื่อง | v3 (เดิม) | v1 (ปัจจุบัน, live-verified) |
+|---|---|---|
+| batch cap | 200 (`800010701`) | **1,000** (`1254104` ถ้าเกิน) — ยิงจริงผ่านครบ 1,000/1,000 |
+| record ordering | เรียงตาม input (200/200) | เรียงตาม input เช่นกัน (**1,000/1,000, 0 mismatch**, ยืนยันด้วย self-identifying record) — bonus: response echo `fields` กลับมาด้วย เช็คซ้ำได้โดยไม่ต้อง fetch เพิ่ม |
+| body format | flat `{fields:[...names], rows:[[values]]}` | array `{records:[{fields:{name:value}}]}` |
+| rate-limit code | `800004135` (per-app per-method) | `1254290` (TooManyRequest) / `1254291` (write conflict, ใช้ code เดียวกับ v3) |
+
+**ผลต่อ backfill:** `chunkSize` เปลี่ยนจาก 200 → 1,000 → throughput ต่อ request เพิ่ม 5 เท่า (ตัวเลข ETA ในตารางด้านบนซึ่งคำนวณจาก 189 rec/s ที่ 200/batch ควรพิจารณาใหม่ เพราะ round-trip ต่อ record ลดลงอย่างมาก แม้ sustained rate ต่อวินาทีจริงยังไม่ได้ re-measure ที่ batch size ใหม่นี้)
+
+**โค้ดที่เปลี่ยน:** `LarkGatewayHttp.batchCreate`, `RunFullSyncJob` (chunkSize default + ไม่ต้องพึ่ง positional `fieldNames` อีกต่อไปเพราะ v1 ส่ง field object ตรง ๆ), `worker.js` (เอา `fieldNames` ออกจาก wiring)
+
 ---
 
 ## 4. Decisions ที่ล็อกแล้ว

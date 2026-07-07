@@ -55,3 +55,49 @@ test('GET /sync/full/status 200 with the use-case result', async () => {
   assert.equal(r.body.jobStatus, 'claimed');
   assert.equal(r.body.jobId, 7);
 });
+
+test('GET /sync/full/check 400 when year query param missing', async () => {
+  const app = createApp({
+    larkAuth: passAuth,
+    baseController: { init: (_r, res) => res.status(404).end(), removePartitions: (_r, res) => res.status(404).end(), status: (_r, res) => res.status(404).end() },
+    syncController: new SyncController({ enqueueFullSync: fakeEnqueue, getFullSyncStatus: { execute: async () => ({}) }, checkFullSync: { execute: async () => ({}) } }),
+  });
+  const r = await request(app, { method: 'GET', path: '/sync/full/check' });
+  assert.equal(r.status, 400);
+});
+
+test('GET /sync/full/check 200 with the use-case result', async () => {
+  const checkFullSync = { execute: async ({ year }) => ({ year, done: true, partitionsChecked: 250, partitionsTotal: 250, findings: [] }) };
+  const app = createApp({
+    larkAuth: passAuth,
+    baseController: { init: (_r, res) => res.status(404).end(), removePartitions: (_r, res) => res.status(404).end(), status: (_r, res) => res.status(404).end() },
+    syncController: new SyncController({ enqueueFullSync: fakeEnqueue, getFullSyncStatus: { execute: async () => ({}) }, checkFullSync }),
+  });
+  const r = await request(app, { method: 'GET', path: '/sync/full/check?year=2024' });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.done, true);
+  assert.deepEqual(r.body.findings, []);
+});
+
+test('POST /sync/full/heal 400 when year missing', async () => {
+  const app = createApp({
+    larkAuth: passAuth,
+    baseController: { init: (_r, res) => res.status(404).end(), removePartitions: (_r, res) => res.status(404).end(), status: (_r, res) => res.status(404).end() },
+    syncController: new SyncController({ enqueueFullSync: fakeEnqueue, getFullSyncStatus: { execute: async () => ({}) }, healFullSync: { execute: async () => ({}) } }),
+  });
+  const r = await request(app, { method: 'POST', path: '/sync/full/heal', body: {} });
+  assert.equal(r.status, 400);
+});
+
+test('POST /sync/full/heal 200 with the use-case result', async () => {
+  const healFullSync = { execute: async ({ year }) => ({ year, done: true, partitionsProcessed: 250, partitionsTotal: 250, actionsTaken: [{ partitionNo: 10, larkTableId: 'tbl10', orphansDeleted: 2, recordsRecreated: 0 }] }) };
+  const app = createApp({
+    larkAuth: passAuth,
+    baseController: { init: (_r, res) => res.status(404).end(), removePartitions: (_r, res) => res.status(404).end(), status: (_r, res) => res.status(404).end() },
+    syncController: new SyncController({ enqueueFullSync: fakeEnqueue, getFullSyncStatus: { execute: async () => ({}) }, healFullSync }),
+  });
+  const r = await request(app, { method: 'POST', path: '/sync/full/heal', body: { year: 2024 } });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.done, true);
+  assert.equal(r.body.actionsTaken[0].orphansDeleted, 2);
+});

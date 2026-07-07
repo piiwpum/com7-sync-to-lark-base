@@ -9,7 +9,6 @@ import { createYearRepository } from './infrastructure/database/YearRepositoryMy
 import { createTokenCache } from './infrastructure/lark/tokenCache.js';
 import { createLarkGateway } from './infrastructure/lark/LarkGatewayHttp.js';
 import { RunFullSyncJob } from './application/use-cases/RunFullSyncJob.js';
-import { ITEC_FIELD_SCHEMA } from './infrastructure/config/itecFieldSchema.js';
 
 /**
  * Worker process composition root — separate entrypoint from src/index.js
@@ -32,7 +31,6 @@ async function main() {
     tokenCache: createTokenCache({ baseDomain: config.lark.baseDomain }),
     createGateway: createLarkGateway,
     baseDomain: config.lark.baseDomain,
-    fieldNames: ITEC_FIELD_SCHEMA.map((f) => f.name),
   });
 
   let shuttingDown = false;
