@@ -9,5 +9,9 @@ export function createOpsPool({ host, port, user, password, database }) {
     host, port, user, password, database,
     waitForConnections: true,
     connectionLimit: 10,
+    // DATETIME columns round-trip as literal strings (no tz reinterpretation).
+    // sync_state.last_utime holds a CE Asia/Bangkok wall-clock watermark that
+    // must come back byte-identical to what fetchChangedSince was given.
+    dateStrings: true,
   });
 }

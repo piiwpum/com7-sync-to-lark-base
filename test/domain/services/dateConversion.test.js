@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { beDateStringToEpochMs, epochMsToUtcDatetimeString } from '../../../src/domain/services/dateConversion.js';
+import { beDateStringToEpochMs, epochMsToUtcDatetimeString, beDatetimeToCeString } from '../../../src/domain/services/dateConversion.js';
 
 test('converts a BE datetime string to the correct CE epoch ms (Asia/Bangkok wall clock)', () => {
   // 2569-05-14 14:12:43.573 BE == 2026-05-14 14:12:43.573 Bangkok time (UTC+7)
@@ -21,4 +21,9 @@ test('throws on an unrecognized format', () => {
 test('epochMsToUtcDatetimeString formats to whole-second UTC', () => {
   const ms = Date.UTC(2026, 4, 14, 7, 12, 43, 573); // 2026-05-14T07:12:43.573Z
   assert.equal(epochMsToUtcDatetimeString(ms), '2026-05-14 07:12:43');
+});
+
+test('beDatetimeToCeString shifts only the year, keeping the wall clock', () => {
+  assert.equal(beDatetimeToCeString('2569-07-03 09:30:00'), '2026-07-03 09:30:00');
+  assert.equal(beDatetimeToCeString('2560-01-01 00:00:00'), '2017-01-01 00:00:00');
 });

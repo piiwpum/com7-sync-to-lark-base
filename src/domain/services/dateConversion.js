@@ -23,3 +23,14 @@ export function beDateStringToEpochMs(dateString) {
 export function epochMsToUtcDatetimeString(epochMs) {
   return new Date(epochMs).toISOString().slice(0, 19).replace('T', ' ');
 }
+
+/**
+ * Shift a Buddhist-Era wall-clock datetime string to CE by adjusting ONLY the
+ * year (−543), leaving the clock untouched. Used to turn a source `UTime`
+ * (BE, Asia/Bangkok wall clock) into the CE watermark string stored in
+ * sync_state. Deliberately NOT via epoch/UTC — that would shift the clock 7h.
+ */
+export function beDatetimeToCeString(beString) {
+  const s = String(beString);
+  return `${Number(s.slice(0, 4)) - BE_OFFSET_YEARS}${s.slice(4)}`;
+}
