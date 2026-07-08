@@ -130,9 +130,10 @@ edge — cover the dispatch with a tiny unit if practical, else manual note).
   ```
 - [ ] Commit.
 
-> ⚠️ **Verify live before merge:** Lark `batchDelete` behavior on an already-
-> deleted / non-existent record id (ignore vs error). If it errors, `#deleteAll`
-> must catch-and-continue. Same P0-style check we did for batch caps.
+> ✅ **Verified live (2026-07-08):** Lark `bitable/v1 batch_delete` with a
+> non-existent record id returns `{code:0, data:{records:[]}, msg:"success"}` —
+> it IGNORES missing ids, no error. So `#deleteAll` is safe as-is on crash-resume
+> (re-deleting already-gone ids won't throw); no catch-and-continue needed.
 
 ## Task 4: enqueue + route + guard
 
