@@ -85,6 +85,30 @@ test('batchCreate retries on rate-limit code then succeeds', async () => {
   assert.equal(n, 2);
 });
 
+test('batchUpdate posts bitable/v1 {records:[{record_id,fields}]} and returns record_ids in order', async () => {
+  let seenUrl, seenBody;
+  const g = gw(stub((url, opts) => {
+    seenUrl = url;
+    seenBody = JSON.parse(opts.body);
+    return { code: 0, data: { records: [{ record_id: 'rec1', fields: { A: 'x1' } }, { record_id: 'rec2', fields: { A: 'x2' } }] } };
+  }));
+  const ids = await g.batchUpdate({
+    baseId: 'B', tableId: 't1',
+    records: [{ recordId: 'rec1', fields: { A: 'x1' } }, { recordId: 'rec2', fields: { A: 'x2' } }],
+  });
+  assert.deepEqual(ids, ['rec1', 'rec2']);
+  assert.match(seenUrl, /\/open-apis\/bitable\/v1\/apps\/B\/tables\/t1\/records\/batch_update$/);
+  assert.deepEqual(seenBody, { records: [{ record_id: 'rec1', fields: { A: 'x1' } }, { record_id: 'rec2', fields: { A: 'x2' } }] });
+});
+
+test('batchUpdate retries on rate-limit code then succeeds', async () => {
+  let n = 0;
+  const g = gw(stub(() => (n++ === 0 ? { code: 1254290, msg: 'too many requests' } : { code: 0, data: { records: [{ record_id: 'rec1', fields: { A: 'x1' } }] } })));
+  const ids = await g.batchUpdate({ baseId: 'B', tableId: 't1', records: [{ recordId: 'rec1', fields: { A: 'x1' } }] });
+  assert.deepEqual(ids, ['rec1']);
+  assert.equal(n, 2);
+});
+
 test('countRecords hits bitable/v1 with page_size=1 and returns data.total', async () => {
   let seenUrl;
   const g = gw(stub((url) => { seenUrl = url; return { code: 0, data: { total: 49800, items: [{}], has_more: true } }; }));

@@ -117,6 +117,17 @@ export function createLarkGateway({ token, baseDomain, fetchFn = fetch, sleepFn 
     return out;
   }
 
+  // bitable/v1 batch_update — mirror of batchCreate (records ordered like input).
+  // Caller must chunk; cap not yet live-verified (assume ~1,000 like create).
+  async function batchUpdate({ baseId, tableId, records }) {
+    const b = await writeCall(
+      `/open-apis/bitable/v1/apps/${baseId}/tables/${tableId}/records/batch_update`,
+      { body: { records: records.map(({ recordId, fields }) => ({ record_id: recordId, fields })) } },
+      'batchUpdate',
+    );
+    return b.data.records.map((r) => r.record_id);
+  }
+
   // bitable/v1: confirmed cap of 500 record ids/call (caller must chunk).
   async function batchDelete({ baseId, tableId, recordIds }) {
     const b = await writeCall(
@@ -127,5 +138,5 @@ export function createLarkGateway({ token, baseDomain, fetchFn = fetch, sleepFn 
     return b.data.records.map((r) => r.record_id);
   }
 
-  return { getBase, listTables, createTable, deleteTable, listFields, createField, batchCreate, countRecords, listRecordIds, batchDelete };
+  return { getBase, listTables, createTable, deleteTable, listFields, createField, batchCreate, batchUpdate, countRecords, listRecordIds, batchDelete };
 }
