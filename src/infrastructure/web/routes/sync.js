@@ -7,5 +7,6 @@ export function syncRoutes({ larkAuth, syncController }) {
   router.get('/full/check', larkAuth, syncController.check);
   router.post('/full/heal', larkAuth, syncController.heal);
   router.post('/incremental', larkAuth, syncController.incremental);
+  router.post('/hard-full', larkAuth, syncController.hardFull);
   return router;
 }

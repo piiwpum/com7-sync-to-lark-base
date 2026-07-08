@@ -9,6 +9,8 @@ import { createYearRepository } from './infrastructure/database/YearRepositoryMy
 import { createTokenCache } from './infrastructure/lark/tokenCache.js';
 import { createLarkGateway } from './infrastructure/lark/LarkGatewayHttp.js';
 import { RunFullSyncJob } from './application/use-cases/RunFullSyncJob.js';
+import { RunHardFullSyncJob } from './application/use-cases/RunHardFullSyncJob.js';
+import { EnqueueFullSync } from './application/use-cases/EnqueueFullSync.js';
 
 /**
  * Worker process composition root — separate entrypoint from src/index.js
@@ -22,16 +24,32 @@ async function main() {
   const com7Pool = createCom7Pool(config.com7Db);
 
   const jobQueue = createJobQueue(opsPool);
+  const mappingRepository = createMappingRepository(opsPool);
+  const yearRepository = createYearRepository(opsPool);
+  const tokenCache = createTokenCache({ baseDomain: config.lark.baseDomain });
 
   const runFullSyncJob = new RunFullSyncJob({
     sourceRepository: createSourceRepository(com7Pool),
-    mappingRepository: createMappingRepository(opsPool),
-    yearRepository: createYearRepository(opsPool),
+    mappingRepository,
+    yearRepository,
     jobQueue,
-    tokenCache: createTokenCache({ baseDomain: config.lark.baseDomain }),
+    tokenCache,
     createGateway: createLarkGateway,
     baseDomain: config.lark.baseDomain,
   });
+
+  const runHardFullSyncJob = new RunHardFullSyncJob({
+    mappingRepository,
+    yearRepository,
+    jobQueue,
+    enqueueFullSync: new EnqueueFullSync({ yearRepository, jobQueue }),
+    tokenCache,
+    createGateway: createLarkGateway,
+    baseDomain: config.lark.baseDomain,
+  });
+
+  // Dispatch a claimed job to the handler for its type.
+  const runners = { full_sync: runFullSyncJob, hard_full_sync: runHardFullSyncJob };
 
   let shuttingDown = false;
   process.on('SIGINT', () => { shuttingDown = true; });
@@ -47,8 +65,14 @@ async function main() {
     }
     for (const job of jobs) {
       console.log(`[worker] running job ${job.id} (${job.type}, year=${job.year})`);
+      const runner = runners[job.type];
+      if (!runner) {
+        console.error(`[worker] job ${job.id} has unknown type '${job.type}' -> failing`);
+        await jobQueue.fail({ id: job.id, payload: { appId: job.payload?.appId } });
+        continue;
+      }
       try {
-        await runFullSyncJob.execute(job);
+        await runner.execute(job);
         console.log(`[worker] job ${job.id} done`);
       } catch (err) {
         console.error(`[worker] job ${job.id} failed:`, err);
