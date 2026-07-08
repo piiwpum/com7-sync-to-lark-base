@@ -242,3 +242,25 @@ test('findByKeys with an empty list does not query the database', async () => {
   assert.equal(found.size, 0);
   assert.equal(conn.calls.length, 0);
 });
+
+test('clearYearMappings deletes every sync_mapping row for the year', async () => {
+  const conn = fakeConnection(() => [{ affectedRows: 3 }]);
+  const repo = createMappingRepository(fakePool(conn));
+  await repo.clearYearMappings({ year: 2026 });
+  assert.match(conn.calls[0].sql, /DELETE FROM sync_mapping WHERE year\s*=\s*\?/);
+  assert.deepEqual(conn.calls[0].params, [2026]);
+});
+
+test('resetPartitionsForYear zeroes fill_count and nulls boundaries, keeping lark_table_id', async () => {
+  const conn = fakeConnection(() => [{}]);
+  const repo = createMappingRepository(fakePool(conn));
+  await repo.resetPartitionsForYear({ year: 2026 });
+  const { sql, params } = conn.calls[0];
+  assert.match(sql, /UPDATE sync_partition SET/);
+  assert.match(sql, /fill_count\s*=\s*0/);
+  assert.match(sql, /first_lark_record_id\s*=\s*NULL/);
+  assert.match(sql, /last_cr_time\s*=\s*NULL/);
+  assert.doesNotMatch(sql, /lark_table_id/); // pointer is preserved
+  assert.match(sql, /WHERE year\s*=\s*\?/);
+  assert.deepEqual(params, [2026]);
+});

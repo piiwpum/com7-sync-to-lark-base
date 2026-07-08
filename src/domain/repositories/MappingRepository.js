@@ -92,4 +92,21 @@ export class MappingRepository {
   async getOpenPartition(q) {
     throw new Error('MappingRepository.getOpenPartition not implemented');
   }
+
+  /**
+   * Delete every mapping row for a year — hard-full-sync clear phase. The Lark
+   * records must already be deleted; this wipes the ops side. @param {{year:number}} q
+   */
+  async clearYearMappings(q) {
+    throw new Error('MappingRepository.clearYearMappings not implemented');
+  }
+
+  /**
+   * Reset a year's partitions to empty (fill_count=0, boundaries NULL) while
+   * KEEPING lark_table_id — the tables/formulas survive a hard-full rebuild.
+   * @param {{year:number}} q
+   */
+  async resetPartitionsForYear(q) {
+    throw new Error('MappingRepository.resetPartitionsForYear not implemented');
+  }
 }

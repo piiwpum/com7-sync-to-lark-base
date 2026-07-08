@@ -161,6 +161,29 @@ export function createMappingRepository(pool) {
     );
   }
 
+  // --- hard-full-sync (nuke & rebuild a year) ---
+
+  /** Delete every sync_mapping row for a year (year is the LIST-partition key). */
+  async function clearYearMappings({ year }) {
+    await pool.query('DELETE FROM sync_mapping WHERE year = ?', [year]);
+  }
+
+  /**
+   * Reset a year's partitions to empty: fill_count=0 and all boundary columns
+   * NULL, so a fresh backfill starts from a clean slate. Deliberately keeps
+   * lark_table_id — the Lark tables (and their manual formulas) still exist.
+   */
+  async function resetPartitionsForYear({ year }) {
+    await pool.query(
+      `UPDATE sync_partition SET
+         fill_count = 0,
+         first_lark_record_id = NULL, first_source_key = NULL, first_cr_time = NULL,
+         last_lark_record_id = NULL, last_source_key = NULL, last_cr_time = NULL
+       WHERE year = ?`,
+      [year],
+    );
+  }
+
   /** Read-only peek at the partition reserveSlots would target next (§10). */
   async function getOpenPartition({ year }) {
     const [rows] = await pool.query(
@@ -175,5 +198,6 @@ export function createMappingRepository(pool) {
   return {
     reserveSlots, saveMappings, findByKeys, getState, setState, updatePartitionBoundary,
     listPartitions, getMappingsForPartition, setFillCount, getOpenPartition,
+    clearYearMappings, resetPartitionsForYear,
   };
 }
