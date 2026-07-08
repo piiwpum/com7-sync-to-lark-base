@@ -49,6 +49,16 @@ export class RunIncrementalSync {
       return { since, newWatermark: since, scanned: 0, inserted: 0, updated: 0, skipped: 0 };
     }
 
+    // Capture the next watermark NOW, from the swept data, before any write.
+    // It's the max UTime in this batch (rows are UTime-ascending, so the last
+    // one). Using the data's own clock — not server/DB NOW() — avoids any
+    // timezone skew against UTime. Truncated to whole seconds: sync_state
+    // .last_utime is DATETIME; slicing rounds DOWN, safe with the `UTime >=`
+    // query (re-scans at most a same-second row next run, an idempotent skip).
+    // Any row modified DURING this sweep gets a UTime newer than this max, so
+    // the next run's `UTime >= watermark` picks it up — nothing is lost.
+    const newWatermark = beDatetimeToCeString(rows[rows.length - 1].UTime).slice(0, 19);
+
     // Pre-check: EVERY year present must have a completed base BEFORE we write
     // anything. If any row has nowhere to land, abort the whole sweep without
     // touching Lark, ops mapping, or the watermark — an operator provisions the
@@ -65,30 +75,28 @@ export class RunIncrementalSync {
     }
 
     // Drain the whole in-memory backlog in this one call, chunkSize rows at a
-    // time (Lark batch cap / findByKeys IN-clause size). The watermark is
-    // checkpointed after every chunk, so a crash mid-sweep resumes from the
-    // last completed chunk instead of redoing everything.
+    // time (Lark batch cap / findByKeys IN-clause size). The watermark is NOT
+    // advanced during the loop — only once, after every chunk has been written
+    // (below). A crash mid-sweep therefore leaves the watermark untouched and
+    // the next run re-does the sweep (idempotent) rather than skipping the
+    // unfinished tail.
     let inserted = 0;
     let updated = 0;
     let skipped = 0;
-    let newWatermark = since;
     for (let i = 0; i < rows.length; i += this.chunkSize) {
       const chunk = rows.slice(i, i + this.chunkSize);
       const r = await this.#processChunk({ gateway, chunk, baseByYear });
       inserted += r.inserted;
       updated += r.updated;
       skipped += r.skipped;
-
-      // rows are globally sorted by UTime asc -> the chunk's last row is its
-      // max. Truncate to whole seconds (sync_state.last_utime is DATETIME):
-      // rounds DOWN, safe with the `UTime >= since` query (at worst re-scans a
-      // same-second row next run, idempotent skip; never drops one).
-      newWatermark = beDatetimeToCeString(chunk[chunk.length - 1].UTime).slice(0, 19);
-      await this.mappingRepository.setState('incremental', {
-        lastUtime: newWatermark,
-        lastRunAt: epochMsToUtcDatetimeString(this.now()),
-      });
     }
+
+    // Only now that every row is in Lark + ops mapping do we advance the
+    // watermark — the last step, so it's never ahead of what's actually synced.
+    await this.mappingRepository.setState('incremental', {
+      lastUtime: newWatermark,
+      lastRunAt: epochMsToUtcDatetimeString(this.now()),
+    });
 
     return { since, newWatermark, scanned: rows.length, inserted, updated, skipped };
   }

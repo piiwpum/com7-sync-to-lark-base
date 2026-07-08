@@ -203,11 +203,24 @@ test('drains a backlog larger than chunkSize in ONE call, checkpointing per chun
   assert.equal(res.inserted, 5); // whole backlog drained in this single call
   assert.equal(calls.batchCreate.length, 3); // one Lark batch per in-memory chunk (2+2+1)
   assert.deepEqual(calls.batchCreate.map((c) => c.records.length), [2, 2, 1]);
-  // watermark checkpointed after every chunk, advancing monotonically
-  assert.deepEqual(calls.setState.map((s) => s.patch.lastUtime), [
-    '2026-07-03 08:01:00', '2026-07-03 08:03:00', '2026-07-03 08:04:00',
-  ]);
+  // watermark stamped ONCE, only after all chunks are written (step 6)
+  assert.equal(calls.setState.length, 1);
+  assert.equal(calls.setState[0].patch.lastUtime, '2026-07-03 08:04:00'); // max UTime of the sweep
   assert.equal(res.newWatermark, '2026-07-03 08:04:00');
+});
+
+test('watermark is captured before writes and stamped only after every chunk succeeds', async () => {
+  // Prove ordering: batchCreate for all chunks happens BEFORE the single setState.
+  const rows = [row(1, 1, '2569-07-03 08:00:00'), row(2, 1, '2569-07-03 08:01:00'), row(3, 1, '2569-07-03 08:02:00')];
+  const order = [];
+  const { deps, gateway } = makeDeps({ rows, chunkSize: 1 });
+  const origSetState = deps.mappingRepository.setState;
+  deps.mappingRepository.setState = async (...a) => { order.push('setState'); return origSetState(...a); };
+  const origCreate = gateway.batchCreate;
+  gateway.batchCreate = async (...a) => { order.push('batchCreate'); return origCreate(...a); };
+  const uc = new RunIncrementalSync(deps);
+  await uc.execute({ gateway });
+  assert.deepEqual(order, ['batchCreate', 'batchCreate', 'batchCreate', 'setState']); // 3 writes, THEN one stamp
 });
 
 test('watermark is truncated to whole seconds (DATETIME column has no sub-second precision)', async () => {
