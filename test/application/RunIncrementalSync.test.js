@@ -12,7 +12,7 @@ function row(sellId, rowNo, uTimeBE = '2569-07-03 09:00:00', crTimeBE = '2569-02
 const keyOf = (r) => `${r.SellBranch}|${r.SellID}|${r.RowNo}`;
 const checksumOf = (r) => crc32(JSON.stringify(transformItecRow(r)));
 
-function makeDeps({ rows = [], state = null, existing = new Map(), reserveSlotsImpl, unprovisioned = [], incompleteYears = [], chunkSize = 1000 } = {}) {
+function makeDeps({ rows = [], state = null, existing = new Map(), reserveSlotsImpl, unprovisioned = [], incompleteYears = [], chunkSize = 1000, sourceNow = '2026-07-08 16:00:00' } = {}) {
   const unprovisionedSet = new Set(unprovisioned);
   const incompleteSet = new Set(incompleteYears);
   const calls = {
@@ -25,6 +25,7 @@ function makeDeps({ rows = [], state = null, existing = new Map(), reserveSlotsI
   };
   const deps = {
     sourceRepository: {
+      async now() { return sourceNow; },
       async fetchChangedSince(q) { calls.fetchSince.push(q); return rows; },
     },
     mappingRepository: {
@@ -51,20 +52,23 @@ function makeDeps({ rows = [], state = null, existing = new Map(), reserveSlotsI
   return { deps, calls, gateway };
 }
 
-test('empty state seeds the watermark from defaultSince', async () => {
-  const { deps, calls } = makeDeps({ rows: [] });
+test('empty state: since=defaultSince, until=source now, watermark still advances to now', async () => {
+  const { deps, calls } = makeDeps({ rows: [], sourceNow: '2026-07-08 16:00:00' });
   const uc = new RunIncrementalSync(deps);
   const res = await uc.execute({ gateway: {} });
   assert.equal(calls.fetchSince[0].since, '2026-07-03 00:00:00');
-  assert.deepEqual(res, { since: '2026-07-03 00:00:00', newWatermark: '2026-07-03 00:00:00', scanned: 0, inserted: 0, updated: 0, skipped: 0 });
-  assert.equal(calls.setState.length, 0); // nothing scanned -> no watermark write
+  assert.equal(calls.fetchSince[0].until, '2026-07-08 16:00:00'); // bounded by source now
+  assert.deepEqual(res, { since: '2026-07-03 00:00:00', newWatermark: '2026-07-08 16:00:00', scanned: 0, inserted: 0, updated: 0, skipped: 0 });
+  assert.equal(calls.setState.length, 1); // advance past the empty window
+  assert.equal(calls.setState[0].patch.lastUtime, '2026-07-08 16:00:00');
 });
 
-test('existing state watermark is used as since', async () => {
-  const { deps, calls } = makeDeps({ rows: [], state: { lastUtime: '2026-07-03 08:00:00' } });
+test('existing state watermark is used as since; window is (since, source-now]', async () => {
+  const { deps, calls } = makeDeps({ rows: [], state: { lastUtime: '2026-07-03 08:00:00' }, sourceNow: '2026-07-08 16:00:00' });
   const uc = new RunIncrementalSync(deps);
   await uc.execute({ gateway: {} });
   assert.equal(calls.fetchSince[0].since, '2026-07-03 08:00:00');
+  assert.equal(calls.fetchSince[0].until, '2026-07-08 16:00:00');
 });
 
 test('a new row (not in mapping) is inserted via reserveSlots + batchCreate + saveMappings', async () => {
@@ -109,7 +113,7 @@ test('a changed row (checksum differs) is updated to the existing record, not re
   assert.equal(saved[0].larkRecordId, 'recExisting');
   assert.equal(saved[0].partitionNo, 5);
   assert.equal(saved[0].checksum, checksumOf(r));
-  assert.deepEqual(res, { since: '2026-07-03 00:00:00', newWatermark: '2026-07-03 09:00:00', scanned: 1, inserted: 0, updated: 1, skipped: 0 });
+  assert.deepEqual(res, { since: '2026-07-03 00:00:00', newWatermark: '2026-07-08 16:00:00', scanned: 1, inserted: 0, updated: 1, skipped: 0 });
 });
 
 test('an unchanged row (checksum equal) is skipped — no Lark call', async () => {
@@ -126,7 +130,7 @@ test('an unchanged row (checksum equal) is skipped — no Lark call', async () =
   assert.equal(calls.batchUpdate.length, 0);
   assert.equal(calls.saveMappings.flat().length, 0);
   assert.equal(res.skipped, 1);
-  assert.equal(res.newWatermark, '2026-07-03 09:00:00'); // watermark still advances past skipped rows
+  assert.equal(res.newWatermark, '2026-07-08 16:00:00'); // watermark = source now, advances even when all skipped
 });
 
 test('rows spanning two years are grouped and routed to their own base', async () => {
@@ -143,16 +147,15 @@ test('rows spanning two years are grouped and routed to their own base', async (
   assert.equal(res.inserted, 2);
 });
 
-test('watermark advances to the max UTime processed (as CE), stamped once for a single chunk', async () => {
-  // fetchChangedSince returns rows ordered by UTime asc, so the last row is the max.
+test('watermark = source now (the sweep boundary), stamped once after processing', async () => {
   const rows = [row(1, 1, '2569-07-03 08:00:00'), row(2, 1, '2569-07-03 09:00:00'), row(3, 1, '2569-07-03 11:45:00')];
-  const { deps, calls, gateway } = makeDeps({ rows });
+  const { deps, calls, gateway } = makeDeps({ rows, sourceNow: '2026-07-08 16:00:00' });
   const uc = new RunIncrementalSync(deps);
   const res = await uc.execute({ gateway });
-  assert.equal(res.newWatermark, '2026-07-03 11:45:00'); // max UTime, year shifted BE->CE
-  assert.equal(calls.setState.length, 1); // 3 rows < chunkSize -> one chunk -> one checkpoint
+  assert.equal(res.newWatermark, '2026-07-08 16:00:00'); // = source now, NOT the data's max UTime
+  assert.equal(calls.setState.length, 1);
   assert.equal(calls.setState[0].scope, 'incremental');
-  assert.equal(calls.setState[0].patch.lastUtime, '2026-07-03 11:45:00');
+  assert.equal(calls.setState[0].patch.lastUtime, '2026-07-08 16:00:00');
 });
 
 test('aborts without writing anything when a row belongs to an unprovisioned year', async () => {
@@ -195,7 +198,7 @@ test('drains a backlog larger than chunkSize in ONE call, checkpointing per chun
     row(3, 1, '2569-07-03 08:02:00'), row(4, 1, '2569-07-03 08:03:00'),
     row(5, 1, '2569-07-03 08:04:00'),
   ];
-  const { deps, calls, gateway } = makeDeps({ rows, chunkSize: 2 });
+  const { deps, calls, gateway } = makeDeps({ rows, chunkSize: 2, sourceNow: '2026-07-08 16:00:00' });
   const uc = new RunIncrementalSync(deps);
   const res = await uc.execute({ gateway });
 
@@ -205,8 +208,8 @@ test('drains a backlog larger than chunkSize in ONE call, checkpointing per chun
   assert.deepEqual(calls.batchCreate.map((c) => c.records.length), [2, 2, 1]);
   // watermark stamped ONCE, only after all chunks are written (step 6)
   assert.equal(calls.setState.length, 1);
-  assert.equal(calls.setState[0].patch.lastUtime, '2026-07-03 08:04:00'); // max UTime of the sweep
-  assert.equal(res.newWatermark, '2026-07-03 08:04:00');
+  assert.equal(calls.setState[0].patch.lastUtime, '2026-07-08 16:00:00'); // = source now
+  assert.equal(res.newWatermark, '2026-07-08 16:00:00');
 });
 
 test('watermark is captured before writes and stamped only after every chunk succeeds', async () => {
@@ -223,13 +226,13 @@ test('watermark is captured before writes and stamped only after every chunk suc
   assert.deepEqual(order, ['batchCreate', 'batchCreate', 'batchCreate', 'setState']); // 3 writes, THEN one stamp
 });
 
-test('watermark is truncated to whole seconds (DATETIME column has no sub-second precision)', async () => {
-  const r = row(10, 1, '2569-07-08 20:58:00.642'); // source UTime carries milliseconds
-  const { deps, calls, gateway } = makeDeps({ rows: [r] });
+test('watermark (source now) is truncated to whole seconds (DATETIME column has no sub-second precision)', async () => {
+  const r = row(10, 1, '2569-07-08 15:00:00');
+  const { deps, calls, gateway } = makeDeps({ rows: [r], sourceNow: '2026-07-08 16:28:41.913' }); // now with ms
   const uc = new RunIncrementalSync(deps);
   const res = await uc.execute({ gateway });
-  assert.equal(res.newWatermark, '2026-07-08 20:58:00'); // .642 dropped
-  assert.equal(calls.setState[0].patch.lastUtime, '2026-07-08 20:58:00');
+  assert.equal(res.newWatermark, '2026-07-08 16:28:41'); // .913 dropped
+  assert.equal(calls.setState[0].patch.lastUtime, '2026-07-08 16:28:41');
 });
 
 test('an insert batch that spans two partitions creates into each segment', async () => {

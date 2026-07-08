@@ -51,11 +51,12 @@ export function createSourceRepository(pool) {
    * result is buffered in memory, so a pathological watermark (e.g. years of
    * backlog) trades memory for one clean scan; keep the watermark current.
    */
-  async function fetchChangedSince({ since }) {
+  async function fetchChangedSince({ since, until }) {
     const sinceBE = ceDatetimeToBeString(since);
-    const sql = 'SELECT * FROM ?? WHERE UTime >= ? ORDER BY UTime, SellID, RowNo';
-    const [itecRows] = await pool.query(sql, ['itec', sinceBE]);
-    const [dailyRows] = await pool.query(sql, ['itec-today', sinceBE]);
+    const untilBE = ceDatetimeToBeString(until);
+    const sql = 'SELECT * FROM ?? WHERE UTime >= ? AND UTime <= ? ORDER BY UTime, SellID, RowNo';
+    const [itecRows] = await pool.query(sql, ['itec', sinceBE, untilBE]);
+    const [dailyRows] = await pool.query(sql, ['itec-today', sinceBE, untilBE]);
 
     const byKey = new Map();
     for (const r of [...itecRows, ...dailyRows]) {
@@ -64,6 +65,14 @@ export function createSourceRepository(pool) {
       if (!prev || r.UTime > prev.UTime) byKey.set(k, r);
     }
     return [...byKey.values()].sort((x, y) => (x.UTime < y.UTime ? -1 : x.UTime > y.UTime ? 1 : 0));
+  }
+
+  // Com7's current time as a CE Asia/Bangkok wall-clock string. UTC_TIMESTAMP()
+  // + numeric-offset CONVERT_TZ pins it to +07:00 without depending on the
+  // server's own timezone or the mysql tz tables (Thailand has no DST).
+  async function now() {
+    const [[row]] = await pool.query("SELECT CONVERT_TZ(UTC_TIMESTAMP(),'+00:00','+07:00') AS now");
+    return row.now;
   }
 
   /** count(*) of a year's itec — reconcile L1 (§9). */
@@ -95,5 +104,5 @@ export function createSourceRepository(pool) {
     return rows.filter((r) => wanted.has(deriveKey(r)));
   }
 
-  return { fetchItecChunk, fetchChangedSince, countItec, fetchBySourceKeys };
+  return { fetchItecChunk, fetchChangedSince, now, countItec, fetchBySourceKeys };
 }

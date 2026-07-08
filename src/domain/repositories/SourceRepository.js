@@ -14,14 +14,27 @@ export class SourceRepository {
   }
 
   /**
-   * ALL rows changed since a watermark (UTime >= since) across BOTH `itec` and
-   * `itec-today` — incremental flow B+C (§8), deduped by deriveKey(). Unbounded:
-   * one call returns the whole backlog; the caller chunks in memory for Lark.
-   * @param {{ since:string }} q — since: CE Bangkok-wall-clock 'YYYY-MM-DD HH:mm:ss'
+   * ALL rows changed in the window (since, until] across BOTH `itec` and
+   * `itec-today` — incremental flow B+C (§8), deduped by deriveKey(). `until`
+   * is the sweep's high-watermark (source NOW(), see `now()`), so rows still
+   * arriving are left for the next run. Unbounded row count; the caller chunks
+   * in memory for Lark.
+   * @param {{ since:string, until:string }} q — CE Bangkok-wall-clock 'YYYY-MM-DD HH:mm:ss'
    * @returns {Promise<object[]>} raw rows (DB column names), ordered by UTime asc
    */
   async fetchChangedSince(q) {
     throw new Error('SourceRepository.fetchChangedSince not implemented');
+  }
+
+  /**
+   * The source DB's current time as a CE Asia/Bangkok wall-clock string — the
+   * high-watermark captured at sweep start. Read from Com7 (not this server) so
+   * there's no cross-machine clock skew, and pinned to +07:00 so it aligns with
+   * UTime's wall clock regardless of the Com7 server's own timezone.
+   * @returns {Promise<string>} 'YYYY-MM-DD HH:mm:ss' (CE)
+   */
+  async now() {
+    throw new Error('SourceRepository.now not implemented');
   }
 
   /** count(*) of a year's itec — reconcile L1 (§9). @param {number} year @returns {Promise<number>} */
