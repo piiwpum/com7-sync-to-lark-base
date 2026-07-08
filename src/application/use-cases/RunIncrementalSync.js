@@ -2,7 +2,7 @@ import { deriveKey } from '../../domain/services/deriveKey.js';
 import { crc32 } from '../../domain/services/checksum.js';
 import { transformItecRow } from '../../domain/services/transformItecRow.js';
 import { crYear } from '../../domain/services/sourceYear.js';
-import { epochMsToUtcDatetimeString } from '../../domain/services/dateConversion.js';
+import { epochMsToUtcDatetimeString, beDatetimeToCeString } from '../../domain/services/dateConversion.js';
 import { Mapping } from '../../domain/entities/Mapping.js';
 import { YearsNotProvisionedError } from '../../domain/errors.js';
 
@@ -41,27 +41,23 @@ export class RunIncrementalSync {
     const state = await this.mappingRepository.getState('incremental');
     const since = state?.lastUtime ?? this.defaultSince;
 
-    // High-watermark = the source DB's clock, captured BEFORE the read (from
-    // Com7 itself, pinned to +07:00 so it aligns with UTime — see now()). We
-    // sweep only up to this instant and, on success, advance the watermark to
-    // exactly it. Rows still arriving get a UTime > until and are left for the
-    // next run — nothing is lost. Truncated to whole seconds (DATETIME column).
-    const until = (await this.sourceRepository.now()).slice(0, 19);
-
-    // ONE scan of Com7: pull the window (since, until] into memory, ordered by
-    // UTime asc. All chunking below is in-memory — the source DB is scanned
-    // exactly once per table regardless of how many Lark batches result.
-    const rows = await this.sourceRepository.fetchChangedSince({ since, until });
+    // ONE scan of Com7: pull the whole backlog (UTime >= since) into memory,
+    // ordered by UTime asc. All chunking below is in-memory — the source DB is
+    // scanned exactly once per call regardless of how many Lark batches result.
+    const rows = await this.sourceRepository.fetchChangedSince({ since });
     if (rows.length === 0) {
-      // Still advance the watermark to `until`: nothing changed in the window,
-      // so next run can start from here instead of re-scanning it.
-      await this.mappingRepository.setState('incremental', {
-        lastUtime: until, lastRunAt: epochMsToUtcDatetimeString(this.now()),
-      });
-      return { since, newWatermark: until, scanned: 0, inserted: 0, updated: 0, skipped: 0 };
+      return { since, newWatermark: since, scanned: 0, inserted: 0, updated: 0, skipped: 0 };
     }
 
-    const newWatermark = until;
+    // Capture the next watermark NOW, from the swept data, before any write.
+    // It's the max UTime in this batch (rows are UTime-ascending, so the last
+    // one). Using the data's own clock — not server/DB NOW() — avoids any
+    // timezone skew against UTime. Truncated to whole seconds: sync_state
+    // .last_utime is DATETIME; slicing rounds DOWN, safe with the `UTime >=`
+    // query (re-scans at most a same-second row next run, an idempotent skip).
+    // Any row modified DURING this sweep gets a UTime newer than this max, so
+    // the next run's `UTime >= watermark` picks it up — nothing is lost.
+    const newWatermark = beDatetimeToCeString(rows[rows.length - 1].UTime).slice(0, 19);
 
     // Pre-check: EVERY year present must have a completed base BEFORE we write
     // anything. If any row has nowhere to land, abort the whole sweep without
