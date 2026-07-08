@@ -34,4 +34,15 @@ export const config = {
   baseInit: {
     budgetMs: num(process.env.BASE_INIT_BUDGET_MS, 600000),
   },
+
+  // POST /sync/incremental (flow B+C, UTime watermark).
+  incremental: {
+    // Watermark seed when sync_state['incremental'] is empty (never run).
+    // Prod = the date this service was deployed at Com7; nothing before it
+    // was ever meant to reach Lark. CE, Asia/Bangkok wall clock. Mock = 3 Jul 2026.
+    defaultSince: process.env.INCREMENTAL_DEFAULT_SINCE ?? '2026-07-03 00:00:00',
+    // Rows pulled per call; also the soft cap that makes a call resumable
+    // (watermark advances to what was processed; next call continues).
+    chunkSize: num(process.env.INCREMENTAL_CHUNK_SIZE, 1000),
+  },
 };
