@@ -4,6 +4,7 @@ import { transformItecRow } from '../../domain/services/transformItecRow.js';
 import { crYear } from '../../domain/services/sourceYear.js';
 import { epochMsToUtcDatetimeString, beDatetimeToCeString } from '../../domain/services/dateConversion.js';
 import { Mapping } from '../../domain/entities/Mapping.js';
+import { YearsNotProvisionedError } from '../../domain/errors.js';
 
 /**
  * One incremental-sync pass (spec §8.B + §8.C, unified). Pulls rows whose
@@ -54,13 +55,28 @@ export class RunIncrementalSync {
       byYear.get(y).push(row);
     }
 
+    // Pre-check: EVERY year in this chunk must have a completed base BEFORE we
+    // write anything. If any row has nowhere to land, abort the whole run
+    // without touching Lark, ops mapping, or the watermark — an operator
+    // provisions the missing year(s) and re-runs. Never a partial sync.
+    const baseByYear = new Map();
+    const missingYears = [];
+    for (const year of byYear.keys()) {
+      const yearRow = await this.yearRepository.getYear(year);
+      if (!yearRow || yearRow.status !== 'complete') missingYears.push(year);
+      else baseByYear.set(year, yearRow.baseId);
+    }
+    if (missingYears.length > 0) {
+      throw new YearsNotProvisionedError(missingYears.sort((a, b) => a - b));
+    }
+
     let inserted = 0;
     let updated = 0;
     let skipped = 0;
     let maxUtimeBE = null; // raw BE UTime string; advance watermark past everything seen
 
     for (const [year, yearRows] of byYear) {
-      const { baseId } = await this.yearRepository.getYear(year);
+      const baseId = baseByYear.get(year);
       const keys = yearRows.map((r) => deriveKey(r));
       const existing = await this.mappingRepository.findByKeys({ year, sourceKeys: keys });
 

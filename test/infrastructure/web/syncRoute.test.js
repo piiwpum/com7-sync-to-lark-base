@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { createApp } from '../../../src/infrastructure/web/app.js';
 import { SyncController } from '../../../src/infrastructure/web/controllers/SyncController.js';
+import { YearsNotProvisionedError } from '../../../src/domain/errors.js';
 
 function request(app, { method, path, headers, body }) {
   return new Promise((resolve) => {
@@ -91,6 +92,18 @@ test('POST /sync/incremental 200 with the use-case summary', async () => {
   assert.equal(r.body.scanned, 3);
   assert.equal(r.body.inserted, 1);
   assert.equal(r.body.newWatermark, '2026-07-03 11:45:00');
+});
+
+test('POST /sync/incremental 409 with the missing years when a year is unprovisioned', async () => {
+  const runIncrementalSync = { execute: async () => { throw new YearsNotProvisionedError([2015, 2027]); } };
+  const app = createApp({
+    larkAuth: passAuth,
+    baseController: { init: (_r, res) => res.status(404).end(), removePartitions: (_r, res) => res.status(404).end(), status: (_r, res) => res.status(404).end() },
+    syncController: new SyncController({ enqueueFullSync: fakeEnqueue, getFullSyncStatus: { execute: async () => ({}) }, runIncrementalSync }),
+  });
+  const r = await request(app, { method: 'POST', path: '/sync/incremental', body: {} });
+  assert.equal(r.status, 409);
+  assert.deepEqual(r.body.years, [2015, 2027]);
 });
 
 test('POST /sync/full/heal 400 when year missing', async () => {

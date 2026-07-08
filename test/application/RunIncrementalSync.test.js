@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { RunIncrementalSync } from '../../src/application/use-cases/RunIncrementalSync.js';
 import { crc32 } from '../../src/domain/services/checksum.js';
 import { transformItecRow } from '../../src/domain/services/transformItecRow.js';
+import { YearsNotProvisionedError } from '../../src/domain/errors.js';
 
 // A raw Com7 row (BE datetimes, Bangkok wall clock).
 function row(sellId, rowNo, uTimeBE = '2569-07-03 09:00:00', crTimeBE = '2569-02-01 00:00:00') {
@@ -11,7 +12,9 @@ function row(sellId, rowNo, uTimeBE = '2569-07-03 09:00:00', crTimeBE = '2569-02
 const keyOf = (r) => `${r.SellBranch}|${r.SellID}|${r.RowNo}`;
 const checksumOf = (r) => crc32(JSON.stringify(transformItecRow(r)));
 
-function makeDeps({ rows = [], state = null, existing = new Map(), reserveSlotsImpl } = {}) {
+function makeDeps({ rows = [], state = null, existing = new Map(), reserveSlotsImpl, unprovisioned = [], incompleteYears = [] } = {}) {
+  const unprovisionedSet = new Set(unprovisioned);
+  const incompleteSet = new Set(incompleteYears);
   const calls = {
     fetchSince: [], findByKeys: [], reserveSlots: [], batchCreate: [], batchUpdate: [],
     saveMappings: [], setState: [], boundary: [],
@@ -35,7 +38,12 @@ function makeDeps({ rows = [], state = null, existing = new Map(), reserveSlotsI
       async updatePartitionBoundary(q) { calls.boundary.push(q); },
       async setState(scope, patch) { calls.setState.push({ scope, patch }); },
     },
-    yearRepository: { async getYear(year) { return { year, baseId: `BASE_${year}`, status: 'complete' }; } },
+    yearRepository: {
+      async getYear(year) {
+        if (unprovisionedSet.has(year)) return null;
+        return { year, baseId: `BASE_${year}`, status: incompleteSet.has(year) ? 'provisioning' : 'complete' };
+      },
+    },
     defaultSince: '2026-07-03 00:00:00',
     chunkSize: 1000,
     now: () => Date.UTC(2026, 6, 3, 5, 0, 0), // fixed
@@ -144,6 +152,39 @@ test('watermark advances to the max UTime processed (as CE), stamped once', asyn
   assert.equal(calls.setState.length, 1);
   assert.equal(calls.setState[0].scope, 'incremental');
   assert.equal(calls.setState[0].patch.lastUtime, '2026-07-03 11:45:00');
+});
+
+test('aborts without writing anything when a row belongs to an unprovisioned year', async () => {
+  const r2026 = row(1, 1, '2569-07-03 09:00:00', '2569-06-01 00:00:00'); // CE 2026 (provisioned)
+  const r2015 = row(2, 1, '2569-07-03 09:10:00', '2558-06-01 00:00:00'); // CE 2015 (NOT provisioned)
+  const { deps, calls, gateway } = makeDeps({ rows: [r2026, r2015], unprovisioned: [2015] });
+  const uc = new RunIncrementalSync(deps);
+
+  await assert.rejects(() => uc.execute({ gateway }), (err) => {
+    assert.ok(err instanceof YearsNotProvisionedError);
+    assert.deepEqual(err.years, [2015]);
+    return true;
+  });
+  // Nothing was written anywhere — not Lark, not ops mapping, not the watermark.
+  assert.equal(calls.batchCreate.length, 0);
+  assert.equal(calls.batchUpdate.length, 0);
+  assert.equal(calls.reserveSlots.length, 0);
+  assert.equal(calls.saveMappings.length, 0);
+  assert.equal(calls.setState.length, 0);
+});
+
+test('reports every missing year (unprovisioned or not yet complete), sorted', async () => {
+  const rows = [
+    row(1, 1, '2569-07-03 09:00:00', '2569-06-01 00:00:00'), // 2026 ok
+    row(2, 1, '2569-07-03 09:10:00', '2558-06-01 00:00:00'), // 2015 missing
+    row(3, 1, '2569-07-03 09:20:00', '2570-06-01 00:00:00'), // 2027 provisioning (incomplete)
+  ];
+  const { deps, gateway } = makeDeps({ rows, unprovisioned: [2015], incompleteYears: [2027] });
+  const uc = new RunIncrementalSync(deps);
+  await assert.rejects(() => uc.execute({ gateway }), (err) => {
+    assert.deepEqual(err.years, [2015, 2027]);
+    return true;
+  });
 });
 
 test('an insert batch that spans two partitions creates into each segment', async () => {
