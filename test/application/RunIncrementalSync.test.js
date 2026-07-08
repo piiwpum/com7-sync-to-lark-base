@@ -187,6 +187,15 @@ test('reports every missing year (unprovisioned or not yet complete), sorted', a
   });
 });
 
+test('watermark is truncated to whole seconds (DATETIME column has no sub-second precision)', async () => {
+  const r = row(10, 1, '2569-07-08 20:58:00.642'); // source UTime carries milliseconds
+  const { deps, calls, gateway } = makeDeps({ rows: [r] });
+  const uc = new RunIncrementalSync(deps);
+  const res = await uc.execute({ gateway });
+  assert.equal(res.newWatermark, '2026-07-08 20:58:00'); // .642 dropped
+  assert.equal(calls.setState[0].patch.lastUtime, '2026-07-08 20:58:00');
+});
+
 test('an insert batch that spans two partitions creates into each segment', async () => {
   const rows = [row(1, 1), row(2, 1), row(3, 1)];
   const reserveSlotsImpl = () => [

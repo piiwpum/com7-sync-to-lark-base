@@ -97,7 +97,13 @@ export class RunIncrementalSync {
       updated += await this.#update({ gateway, baseId, items: toUpdate });
     }
 
-    const newWatermark = beDatetimeToCeString(maxUtimeBE);
+    // Truncate to whole seconds: sync_state.last_utime is DATETIME (no
+    // sub-second precision), and source UTime carries milliseconds. Slicing
+    // rounds DOWN, which is safe with the `UTime >= since` query — at worst a
+    // few same-second rows get re-scanned next run (idempotent skip), never
+    // skipped. Storing the raw .fff would let MySQL round the watermark UP and
+    // silently drop rows in that second.
+    const newWatermark = beDatetimeToCeString(maxUtimeBE).slice(0, 19);
     await this.mappingRepository.setState('incremental', {
       lastUtime: newWatermark,
       lastRunAt: epochMsToUtcDatetimeString(this.now()),
