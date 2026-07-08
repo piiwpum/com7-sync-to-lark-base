@@ -41,27 +41,21 @@ export class RunIncrementalSync {
     const state = await this.mappingRepository.getState('incremental');
     const since = state?.lastUtime ?? this.defaultSince;
 
-    const rows = await this.sourceRepository.fetchChangedSince({ since, limit: this.chunkSize });
+    // ONE scan of Com7: pull the whole backlog (UTime >= since) into memory,
+    // ordered by UTime asc. All chunking below is in-memory — the source DB is
+    // scanned exactly once per call regardless of how many Lark batches result.
+    const rows = await this.sourceRepository.fetchChangedSince({ since });
     if (rows.length === 0) {
       return { since, newWatermark: since, scanned: 0, inserted: 0, updated: 0, skipped: 0 };
     }
 
-    // Group by the CE year each row belongs to (CrTime, immutable) so every
-    // row lands in the right yearly base.
-    const byYear = new Map();
-    for (const row of rows) {
-      const y = crYear(row);
-      if (!byYear.has(y)) byYear.set(y, []);
-      byYear.get(y).push(row);
-    }
-
-    // Pre-check: EVERY year in this chunk must have a completed base BEFORE we
-    // write anything. If any row has nowhere to land, abort the whole run
-    // without touching Lark, ops mapping, or the watermark — an operator
-    // provisions the missing year(s) and re-runs. Never a partial sync.
+    // Pre-check: EVERY year present must have a completed base BEFORE we write
+    // anything. If any row has nowhere to land, abort the whole sweep without
+    // touching Lark, ops mapping, or the watermark — an operator provisions the
+    // missing year(s) and re-runs. Never a partial sync.
     const baseByYear = new Map();
     const missingYears = [];
-    for (const year of byYear.keys()) {
+    for (const year of new Set(rows.map((r) => crYear(r)))) {
       const yearRow = await this.yearRepository.getYear(year);
       if (!yearRow || yearRow.status !== 'complete') missingYears.push(year);
       else baseByYear.set(year, yearRow.baseId);
@@ -70,11 +64,48 @@ export class RunIncrementalSync {
       throw new YearsNotProvisionedError(missingYears.sort((a, b) => a - b));
     }
 
+    // Drain the whole in-memory backlog in this one call, chunkSize rows at a
+    // time (Lark batch cap / findByKeys IN-clause size). The watermark is
+    // checkpointed after every chunk, so a crash mid-sweep resumes from the
+    // last completed chunk instead of redoing everything.
     let inserted = 0;
     let updated = 0;
     let skipped = 0;
-    let maxUtimeBE = null; // raw BE UTime string; advance watermark past everything seen
+    let newWatermark = since;
+    for (let i = 0; i < rows.length; i += this.chunkSize) {
+      const chunk = rows.slice(i, i + this.chunkSize);
+      const r = await this.#processChunk({ gateway, chunk, baseByYear });
+      inserted += r.inserted;
+      updated += r.updated;
+      skipped += r.skipped;
 
+      // rows are globally sorted by UTime asc -> the chunk's last row is its
+      // max. Truncate to whole seconds (sync_state.last_utime is DATETIME):
+      // rounds DOWN, safe with the `UTime >= since` query (at worst re-scans a
+      // same-second row next run, idempotent skip; never drops one).
+      newWatermark = beDatetimeToCeString(chunk[chunk.length - 1].UTime).slice(0, 19);
+      await this.mappingRepository.setState('incremental', {
+        lastUtime: newWatermark,
+        lastRunAt: epochMsToUtcDatetimeString(this.now()),
+      });
+    }
+
+    return { since, newWatermark, scanned: rows.length, inserted, updated, skipped };
+  }
+
+  // Process one in-memory chunk: group by year, route each row to insert /
+  // update / skip, and write to Lark + ops. No source-DB access here.
+  async #processChunk({ gateway, chunk, baseByYear }) {
+    const byYear = new Map();
+    for (const row of chunk) {
+      const y = crYear(row);
+      if (!byYear.has(y)) byYear.set(y, []);
+      byYear.get(y).push(row);
+    }
+
+    let inserted = 0;
+    let updated = 0;
+    let skipped = 0;
     for (const [year, yearRows] of byYear) {
       const baseId = baseByYear.get(year);
       const keys = yearRows.map((r) => deriveKey(r));
@@ -90,25 +121,12 @@ export class RunIncrementalSync {
         if (!cur) toInsert.push({ fields, checksum, key });
         else if (cur.checksum !== checksum) toUpdate.push({ fields, checksum, key, cur });
         else skipped++;
-        if (maxUtimeBE === null || row.UTime > maxUtimeBE) maxUtimeBE = row.UTime;
       }
 
       inserted += await this.#insert({ gateway, year, baseId, items: toInsert });
       updated += await this.#update({ gateway, baseId, items: toUpdate });
     }
-
-    // Truncate to whole seconds: sync_state.last_utime is DATETIME (no
-    // sub-second precision), and source UTime carries milliseconds. Slicing
-    // rounds DOWN, which is safe with the `UTime >= since` query — at worst a
-    // few same-second rows get re-scanned next run (idempotent skip), never
-    // skipped. Storing the raw .fff would let MySQL round the watermark UP and
-    // silently drop rows in that second.
-    const newWatermark = beDatetimeToCeString(maxUtimeBE).slice(0, 19);
-    await this.mappingRepository.setState('incremental', {
-      lastUtime: newWatermark,
-      lastRunAt: epochMsToUtcDatetimeString(this.now()),
-    });
-    return { since, newWatermark, scanned: rows.length, inserted, updated, skipped };
+    return { inserted, updated, skipped };
   }
 
   // New rows: reserve partition slots and batchCreate, exactly like backfill

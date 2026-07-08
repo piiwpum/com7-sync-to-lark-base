@@ -14,9 +14,10 @@ export class SourceRepository {
   }
 
   /**
-   * Rows changed since a watermark (UTime >= since) across BOTH `itec` and
-   * `itec-today` — incremental flow B+C (§8), deduped by deriveKey().
-   * @param {{ since:string, limit:number }} q — since: CE Bangkok-wall-clock 'YYYY-MM-DD HH:mm:ss'
+   * ALL rows changed since a watermark (UTime >= since) across BOTH `itec` and
+   * `itec-today` — incremental flow B+C (§8), deduped by deriveKey(). Unbounded:
+   * one call returns the whole backlog; the caller chunks in memory for Lark.
+   * @param {{ since:string }} q — since: CE Bangkok-wall-clock 'YYYY-MM-DD HH:mm:ss'
    * @returns {Promise<object[]>} raw rows (DB column names), ordered by UTime asc
    */
   async fetchChangedSince(q) {

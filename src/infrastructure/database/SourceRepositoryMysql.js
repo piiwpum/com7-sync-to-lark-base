@@ -39,18 +39,23 @@ export function createSourceRepository(pool) {
   }
 
   /**
-   * Rows changed since a watermark — incremental flow B+C (§8). Scans BOTH
-   * `itec` (historical) and `itec-today` (today) for `UTime >= since`, then
-   * dedups by deriveKey() keeping the newer UTime (a row can sit in both
+   * ALL rows changed since a watermark — incremental flow B+C (§8). One scan
+   * per table: reads BOTH `itec` (historical) and `itec-today` (today) for
+   * `UTime >= since` with NO row limit (the caller chunks in memory for Lark),
+   * then dedups by deriveKey() keeping the newer UTime (a row can sit in both
    * around the midnight merge). `since` is a CE Bangkok-wall-clock datetime
-   * string; converted to BE for the query. Ordered by UTime ascending so a
-   * budget-truncated caller advances its watermark correctly.
+   * string; converted to BE for the query. Ordered by UTime ascending so the
+   * caller can checkpoint its watermark chunk-by-chunk.
+   *
+   * NOTE: unbounded by design — a single call sweeps the whole backlog. The
+   * result is buffered in memory, so a pathological watermark (e.g. years of
+   * backlog) trades memory for one clean scan; keep the watermark current.
    */
-  async function fetchChangedSince({ since, limit }) {
+  async function fetchChangedSince({ since }) {
     const sinceBE = ceDatetimeToBeString(since);
-    const sql = 'SELECT * FROM ?? WHERE UTime >= ? ORDER BY UTime, SellID, RowNo LIMIT ?';
-    const [itecRows] = await pool.query(sql, ['itec', sinceBE, limit]);
-    const [dailyRows] = await pool.query(sql, ['itec-today', sinceBE, limit]);
+    const sql = 'SELECT * FROM ?? WHERE UTime >= ? ORDER BY UTime, SellID, RowNo';
+    const [itecRows] = await pool.query(sql, ['itec', sinceBE]);
+    const [dailyRows] = await pool.query(sql, ['itec-today', sinceBE]);
 
     const byKey = new Map();
     for (const r of [...itecRows, ...dailyRows]) {
@@ -58,9 +63,7 @@ export function createSourceRepository(pool) {
       const prev = byKey.get(k);
       if (!prev || r.UTime > prev.UTime) byKey.set(k, r);
     }
-    return [...byKey.values()]
-      .sort((x, y) => (x.UTime < y.UTime ? -1 : x.UTime > y.UTime ? 1 : 0))
-      .slice(0, limit);
+    return [...byKey.values()].sort((x, y) => (x.UTime < y.UTime ? -1 : x.UTime > y.UTime ? 1 : 0));
   }
 
   /** count(*) of a year's itec — reconcile L1 (§9). */

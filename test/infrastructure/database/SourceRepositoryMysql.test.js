@@ -44,18 +44,18 @@ test('fetchItecChunk returns the rows mysql2 gives back, unmodified', async () =
   assert.deepEqual(result, rows);
 });
 
-test('fetchChangedSince queries itec and itec-today with UTime >= BE(since)', async () => {
+test('fetchChangedSince queries itec and itec-today with UTime >= BE(since), no LIMIT', async () => {
   const pool = fakePool(() => []);
   const repo = createSourceRepository(pool);
-  await repo.fetchChangedSince({ since: '2026-07-03 00:00:00', limit: 1000 });
+  await repo.fetchChangedSince({ since: '2026-07-03 00:00:00' });
   assert.equal(pool.calls.length, 2);
   for (const { sql } of pool.calls) {
     assert.match(sql, /FROM \?\? WHERE UTime >= \?/);
     assert.match(sql, /ORDER BY UTime, SellID, RowNo/);
-    assert.match(sql, /LIMIT \?/);
+    assert.doesNotMatch(sql, /LIMIT/); // unbounded — caller chunks in memory
   }
-  assert.deepEqual(pool.calls[0].params, ['itec', '2569-07-03 00:00:00', 1000]); // +543y, same clock
-  assert.deepEqual(pool.calls[1].params, ['itec-today', '2569-07-03 00:00:00', 1000]);
+  assert.deepEqual(pool.calls[0].params, ['itec', '2569-07-03 00:00:00']); // +543y, same clock
+  assert.deepEqual(pool.calls[1].params, ['itec-today', '2569-07-03 00:00:00']);
 });
 
 test('fetchChangedSince dedups a row present in both tables, keeping the newer UTime', async () => {
@@ -64,20 +64,19 @@ test('fetchChangedSince dedups a row present in both tables, keeping the newer U
   const other = { SellBranch: 114, SellID: 11, RowNo: 1, UTime: '2569-07-03 07:00:00' };
   const pool = fakePool((_sql, params) => (params[0] === 'itec' ? [itecRow, other] : [dailyRow]));
   const repo = createSourceRepository(pool);
-  const rows = await repo.fetchChangedSince({ since: '2026-07-03 00:00:00', limit: 1000 });
+  const rows = await repo.fetchChangedSince({ since: '2026-07-03 00:00:00' });
   // ordered ascending by UTime; dedup keeps the 09:30 daily row for key 114|10|1
   assert.deepEqual(rows, [other, dailyRow]);
 });
 
-test('fetchChangedSince caps the merged result at limit', async () => {
+test('fetchChangedSince returns the full merged set ordered by UTime (no cap)', async () => {
   const mk = (id, u) => ({ SellBranch: 1, SellID: id, RowNo: 1, UTime: u });
   const pool = fakePool((_sql, params) => (params[0] === 'itec'
     ? [mk(1, '2569-07-03 01:00:00'), mk(2, '2569-07-03 02:00:00')]
     : [mk(3, '2569-07-03 03:00:00')]));
   const repo = createSourceRepository(pool);
-  const rows = await repo.fetchChangedSince({ since: '2026-07-03 00:00:00', limit: 2 });
-  assert.equal(rows.length, 2);
-  assert.deepEqual(rows.map((r) => r.SellID), [1, 2]); // earliest two by UTime
+  const rows = await repo.fetchChangedSince({ since: '2026-07-03 00:00:00' });
+  assert.deepEqual(rows.map((r) => r.SellID), [1, 2, 3]); // all rows, ascending
 });
 
 test('countItec converts CE year to BE and returns the row count', async () => {

@@ -12,7 +12,7 @@ function row(sellId, rowNo, uTimeBE = '2569-07-03 09:00:00', crTimeBE = '2569-02
 const keyOf = (r) => `${r.SellBranch}|${r.SellID}|${r.RowNo}`;
 const checksumOf = (r) => crc32(JSON.stringify(transformItecRow(r)));
 
-function makeDeps({ rows = [], state = null, existing = new Map(), reserveSlotsImpl, unprovisioned = [], incompleteYears = [] } = {}) {
+function makeDeps({ rows = [], state = null, existing = new Map(), reserveSlotsImpl, unprovisioned = [], incompleteYears = [], chunkSize = 1000 } = {}) {
   const unprovisionedSet = new Set(unprovisioned);
   const incompleteSet = new Set(incompleteYears);
   const calls = {
@@ -45,7 +45,7 @@ function makeDeps({ rows = [], state = null, existing = new Map(), reserveSlotsI
       },
     },
     defaultSince: '2026-07-03 00:00:00',
-    chunkSize: 1000,
+    chunkSize,
     now: () => Date.UTC(2026, 6, 3, 5, 0, 0), // fixed
   };
   return { deps, calls, gateway };
@@ -143,13 +143,14 @@ test('rows spanning two years are grouped and routed to their own base', async (
   assert.equal(res.inserted, 2);
 });
 
-test('watermark advances to the max UTime processed (as CE), stamped once', async () => {
-  const rows = [row(1, 1, '2569-07-03 08:00:00'), row(2, 1, '2569-07-03 11:45:00'), row(3, 1, '2569-07-03 09:00:00')];
+test('watermark advances to the max UTime processed (as CE), stamped once for a single chunk', async () => {
+  // fetchChangedSince returns rows ordered by UTime asc, so the last row is the max.
+  const rows = [row(1, 1, '2569-07-03 08:00:00'), row(2, 1, '2569-07-03 09:00:00'), row(3, 1, '2569-07-03 11:45:00')];
   const { deps, calls, gateway } = makeDeps({ rows });
   const uc = new RunIncrementalSync(deps);
   const res = await uc.execute({ gateway });
   assert.equal(res.newWatermark, '2026-07-03 11:45:00'); // max UTime, year shifted BE->CE
-  assert.equal(calls.setState.length, 1);
+  assert.equal(calls.setState.length, 1); // 3 rows < chunkSize -> one chunk -> one checkpoint
   assert.equal(calls.setState[0].scope, 'incremental');
   assert.equal(calls.setState[0].patch.lastUtime, '2026-07-03 11:45:00');
 });
@@ -185,6 +186,28 @@ test('reports every missing year (unprovisioned or not yet complete), sorted', a
     assert.deepEqual(err.years, [2015, 2027]);
     return true;
   });
+});
+
+test('drains a backlog larger than chunkSize in ONE call, checkpointing per chunk', async () => {
+  // 5 rows, ascending UTime (as fetchChangedSince returns), chunkSize 2 -> 3 chunks.
+  const rows = [
+    row(1, 1, '2569-07-03 08:00:00'), row(2, 1, '2569-07-03 08:01:00'),
+    row(3, 1, '2569-07-03 08:02:00'), row(4, 1, '2569-07-03 08:03:00'),
+    row(5, 1, '2569-07-03 08:04:00'),
+  ];
+  const { deps, calls, gateway } = makeDeps({ rows, chunkSize: 2 });
+  const uc = new RunIncrementalSync(deps);
+  const res = await uc.execute({ gateway });
+
+  assert.equal(res.scanned, 5);
+  assert.equal(res.inserted, 5); // whole backlog drained in this single call
+  assert.equal(calls.batchCreate.length, 3); // one Lark batch per in-memory chunk (2+2+1)
+  assert.deepEqual(calls.batchCreate.map((c) => c.records.length), [2, 2, 1]);
+  // watermark checkpointed after every chunk, advancing monotonically
+  assert.deepEqual(calls.setState.map((s) => s.patch.lastUtime), [
+    '2026-07-03 08:01:00', '2026-07-03 08:03:00', '2026-07-03 08:04:00',
+  ]);
+  assert.equal(res.newWatermark, '2026-07-03 08:04:00');
 });
 
 test('watermark is truncated to whole seconds (DATETIME column has no sub-second precision)', async () => {
