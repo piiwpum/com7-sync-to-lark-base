@@ -7,6 +7,14 @@ function beYearRange(year) {
   return { startBE: `${yearBE}-01-01 00:00:00`, endBE: `${yearBE + 1}-01-01 00:00:00` };
 }
 
+// A CE datetime string (Bangkok wall clock) -> BE by shifting ONLY the year
+// (+543), keeping the clock identical. Never round-trip through epoch/UTC here:
+// UTime is stored Bangkok wall-clock, so a tz shift would misalign by 7h.
+function ceDatetimeToBeString(since) {
+  const s = String(since);
+  return `${Number(s.slice(0, 4)) + BE_OFFSET_YEARS}${s.slice(4)}`;
+}
+
 /**
  * SourceRepository adapter over Com7's `itec` table (instance A, read-only).
  * Cursor pagination uses (SellID, RowNo) — the only index on this table
@@ -28,6 +36,31 @@ export function createSourceRepository(pool) {
       [startBE, endBE, afterSellId, afterSellId, afterRowNo, limit],
     );
     return rows;
+  }
+
+  /**
+   * Rows changed since a watermark — incremental flow B+C (§8). Scans BOTH
+   * `itec` (historical) and `daily_itec_temp` (today) for `UTime >= since`,
+   * then dedups by deriveKey() keeping the newer UTime (a row can sit in both
+   * around the midnight merge). `since` is a CE Bangkok-wall-clock datetime
+   * string; converted to BE for the query. Ordered by UTime ascending so a
+   * budget-truncated caller advances its watermark correctly.
+   */
+  async function fetchChangedSince({ since, limit }) {
+    const sinceBE = ceDatetimeToBeString(since);
+    const sql = 'SELECT * FROM ?? WHERE UTime >= ? ORDER BY UTime, SellID, RowNo LIMIT ?';
+    const [itecRows] = await pool.query(sql, ['itec', sinceBE, limit]);
+    const [dailyRows] = await pool.query(sql, ['daily_itec_temp', sinceBE, limit]);
+
+    const byKey = new Map();
+    for (const r of [...itecRows, ...dailyRows]) {
+      const k = deriveKey(r);
+      const prev = byKey.get(k);
+      if (!prev || r.UTime > prev.UTime) byKey.set(k, r);
+    }
+    return [...byKey.values()]
+      .sort((x, y) => (x.UTime < y.UTime ? -1 : x.UTime > y.UTime ? 1 : 0))
+      .slice(0, limit);
   }
 
   /** count(*) of a year's itec — reconcile L1 (§9). */
@@ -59,5 +92,5 @@ export function createSourceRepository(pool) {
     return rows.filter((r) => wanted.has(deriveKey(r)));
   }
 
-  return { fetchItecChunk, countItec, fetchBySourceKeys };
+  return { fetchItecChunk, fetchChangedSince, countItec, fetchBySourceKeys };
 }
