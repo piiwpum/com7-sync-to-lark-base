@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createMappingRepository } from '../../../src/infrastructure/database/MappingRepositoryMysql.js';
+import { Mapping } from '../../../src/domain/entities/Mapping.js';
 
 function fakeConnection(queryHandler) {
   const calls = [];
@@ -213,4 +214,31 @@ test('getOpenPartition returns null when every partition is at capacity', async 
   const conn = fakeConnection(() => [[]]);
   const repo = createMappingRepository(fakePool(conn));
   assert.equal(await repo.getOpenPartition({ year: 2024 }), null);
+});
+
+test('findByKeys point-looks-up by (year, source_key IN ...) and returns a Map of Mappings', async () => {
+  const conn = fakeConnection(() => [[
+    { year: 2026, base_id: 'B', source_key: '114|10|1', partition_no: 3, lark_table_id: 'tbl3', lark_record_id: 'rec1', checksum: 111, cr_time: '2026-01-02 03:04:05', u_time: '2026-07-03 09:00:00' },
+  ]]);
+  const repo = createMappingRepository(fakePool(conn));
+  const found = await repo.findByKeys({ year: 2026, sourceKeys: ['114|10|1', '114|99|9'] });
+  assert.match(conn.calls[0].sql, /WHERE year=\? AND source_key IN \(\?\)/);
+  assert.deepEqual(conn.calls[0].params, [2026, ['114|10|1', '114|99|9']]);
+  assert.ok(found instanceof Map);
+  assert.equal(found.size, 1); // only the key that exists
+  const m = found.get('114|10|1');
+  assert.ok(m instanceof Mapping);
+  assert.equal(m.larkRecordId, 'rec1');
+  assert.equal(m.larkTableId, 'tbl3');
+  assert.equal(m.partitionNo, 3);
+  assert.equal(m.checksum, 111);
+  assert.equal(found.get('114|99|9'), undefined);
+});
+
+test('findByKeys with an empty list does not query the database', async () => {
+  const conn = fakeConnection(() => { throw new Error('should not query'); });
+  const repo = createMappingRepository(fakePool(conn));
+  const found = await repo.findByKeys({ year: 2026, sourceKeys: [] });
+  assert.equal(found.size, 0);
+  assert.equal(conn.calls.length, 0);
 });

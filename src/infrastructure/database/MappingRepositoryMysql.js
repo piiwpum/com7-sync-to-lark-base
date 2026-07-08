@@ -1,3 +1,5 @@
+import { Mapping } from '../../domain/entities/Mapping.js';
+
 const PARTITION_CAPACITY = 50000;
 
 /**
@@ -61,6 +63,29 @@ export function createMappingRepository(pool) {
          checksum = VALUES(checksum), u_time = VALUES(u_time)`,
       [rows],
     );
+  }
+
+  /**
+   * Point-lookup existing mappings by (year, source_key) — drives incremental
+   * update-vs-insert routing (§8.B). Returns a Map keyed by sourceKey; absent
+   * keys simply aren't in the Map. Uses the PK, so no scan.
+   */
+  async function findByKeys({ year, sourceKeys }) {
+    const found = new Map();
+    if (sourceKeys.length === 0) return found;
+    const [rows] = await pool.query(
+      `SELECT year, base_id, source_key, partition_no, lark_table_id, lark_record_id, checksum, cr_time, u_time
+         FROM sync_mapping WHERE year=? AND source_key IN (?)`,
+      [year, sourceKeys],
+    );
+    for (const r of rows) {
+      found.set(r.source_key, new Mapping({
+        year: r.year, baseId: r.base_id, sourceKey: r.source_key, partitionNo: r.partition_no,
+        larkTableId: r.lark_table_id, larkRecordId: r.lark_record_id, checksum: r.checksum,
+        crTime: r.cr_time, uTime: r.u_time,
+      }));
+    }
+    return found;
   }
 
   async function getState(scope) {
@@ -148,7 +173,7 @@ export function createMappingRepository(pool) {
   }
 
   return {
-    reserveSlots, saveMappings, getState, setState, updatePartitionBoundary,
+    reserveSlots, saveMappings, findByKeys, getState, setState, updatePartitionBoundary,
     listPartitions, getMappingsForPartition, setFillCount, getOpenPartition,
   };
 }
