@@ -15,7 +15,7 @@ export class SourceRepository {
 
   /**
    * Rows changed since a watermark (UTime >= since) across BOTH `itec` and
-   * `daily_itec_temp` — incremental flow B+C (§8), deduped by deriveKey().
+   * `itec-today` — incremental flow B+C (§8), deduped by deriveKey().
    * @param {{ since:string, limit:number }} q — since: CE Bangkok-wall-clock 'YYYY-MM-DD HH:mm:ss'
    * @returns {Promise<object[]>} raw rows (DB column names), ordered by UTime asc
    */

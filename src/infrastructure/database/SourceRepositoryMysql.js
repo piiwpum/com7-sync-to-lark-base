@@ -40,8 +40,8 @@ export function createSourceRepository(pool) {
 
   /**
    * Rows changed since a watermark — incremental flow B+C (§8). Scans BOTH
-   * `itec` (historical) and `daily_itec_temp` (today) for `UTime >= since`,
-   * then dedups by deriveKey() keeping the newer UTime (a row can sit in both
+   * `itec` (historical) and `itec-today` (today) for `UTime >= since`, then
+   * dedups by deriveKey() keeping the newer UTime (a row can sit in both
    * around the midnight merge). `since` is a CE Bangkok-wall-clock datetime
    * string; converted to BE for the query. Ordered by UTime ascending so a
    * budget-truncated caller advances its watermark correctly.
@@ -50,7 +50,7 @@ export function createSourceRepository(pool) {
     const sinceBE = ceDatetimeToBeString(since);
     const sql = 'SELECT * FROM ?? WHERE UTime >= ? ORDER BY UTime, SellID, RowNo LIMIT ?';
     const [itecRows] = await pool.query(sql, ['itec', sinceBE, limit]);
-    const [dailyRows] = await pool.query(sql, ['daily_itec_temp', sinceBE, limit]);
+    const [dailyRows] = await pool.query(sql, ['itec-today', sinceBE, limit]);
 
     const byKey = new Map();
     for (const r of [...itecRows, ...dailyRows]) {

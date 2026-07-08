@@ -44,7 +44,7 @@ test('fetchItecChunk returns the rows mysql2 gives back, unmodified', async () =
   assert.deepEqual(result, rows);
 });
 
-test('fetchChangedSince queries itec and daily_itec_temp with UTime >= BE(since)', async () => {
+test('fetchChangedSince queries itec and itec-today with UTime >= BE(since)', async () => {
   const pool = fakePool(() => []);
   const repo = createSourceRepository(pool);
   await repo.fetchChangedSince({ since: '2026-07-03 00:00:00', limit: 1000 });
@@ -55,7 +55,7 @@ test('fetchChangedSince queries itec and daily_itec_temp with UTime >= BE(since)
     assert.match(sql, /LIMIT \?/);
   }
   assert.deepEqual(pool.calls[0].params, ['itec', '2569-07-03 00:00:00', 1000]); // +543y, same clock
-  assert.deepEqual(pool.calls[1].params, ['daily_itec_temp', '2569-07-03 00:00:00', 1000]);
+  assert.deepEqual(pool.calls[1].params, ['itec-today', '2569-07-03 00:00:00', 1000]);
 });
 
 test('fetchChangedSince dedups a row present in both tables, keeping the newer UTime', async () => {
