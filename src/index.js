@@ -16,6 +16,7 @@ import { EnqueueFullSync } from './application/use-cases/EnqueueFullSync.js';
 import { GetFullSyncStatus } from './application/use-cases/GetFullSyncStatus.js';
 import { CheckFullSync } from './application/use-cases/CheckFullSync.js';
 import { HealFullSync } from './application/use-cases/HealFullSync.js';
+import { RunIncrementalSync } from './application/use-cases/RunIncrementalSync.js';
 import { SyncController } from './infrastructure/web/controllers/SyncController.js';
 import { createJobQueue } from './infrastructure/database/JobQueueMysql.js';
 import { createMappingRepository } from './infrastructure/database/MappingRepositoryMysql.js';
@@ -60,8 +61,12 @@ async function bootstrap() {
   const getFullSyncStatus = new GetFullSyncStatus({ jobQueue, mappingRepository });
   const checkFullSync = new CheckFullSync({ sourceRepository, mappingRepository, yearRepository });
   const healFullSync = new HealFullSync({ sourceRepository, mappingRepository, yearRepository });
+  const runIncrementalSync = new RunIncrementalSync({
+    sourceRepository, mappingRepository, yearRepository,
+    defaultSince: config.incremental.defaultSince, chunkSize: config.incremental.chunkSize,
+  });
   const syncController = new SyncController({
-    enqueueFullSync, getFullSyncStatus, checkFullSync, healFullSync, budgetMs: config.baseInit.budgetMs,
+    enqueueFullSync, getFullSyncStatus, checkFullSync, healFullSync, runIncrementalSync, budgetMs: config.baseInit.budgetMs,
   });
 
   const app = createApp({ larkAuth, baseController, opsPool, syncController });

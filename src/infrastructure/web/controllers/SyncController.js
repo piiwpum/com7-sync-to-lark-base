@@ -3,13 +3,25 @@ import { YearNotProvisionedError } from '../../../domain/errors.js';
 const DEFAULT_BUDGET_MS = 600000; // soft time budget per call; override via config/env
 
 export class SyncController {
-  constructor({ enqueueFullSync, getFullSyncStatus, checkFullSync, healFullSync, budgetMs = DEFAULT_BUDGET_MS }) {
+  constructor({ enqueueFullSync, getFullSyncStatus, checkFullSync, healFullSync, runIncrementalSync, budgetMs = DEFAULT_BUDGET_MS }) {
     this.enqueueFullSync = enqueueFullSync;
     this.getFullSyncStatus = getFullSyncStatus;
     this.checkFullSync = checkFullSync;
     this.healFullSync = healFullSync;
+    this.runIncrementalSync = runIncrementalSync;
     this.budgetMs = budgetMs;
   }
+
+  // POST /sync/incremental — one watermark-driven pass (new + changed rows from
+  // itec ∪ daily_itec_temp). Runs synchronously; the watermark is the checkpoint.
+  incremental = async (req, res, next) => {
+    try {
+      const summary = await this.runIncrementalSync.execute({ gateway: req.larkGateway });
+      res.status(200).json(summary);
+    } catch (err) {
+      next(err);
+    }
+  };
 
   init = async (req, res, next) => {
     const year = req.body?.year;

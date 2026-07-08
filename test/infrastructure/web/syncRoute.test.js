@@ -79,6 +79,20 @@ test('GET /sync/full/check 200 with the use-case result', async () => {
   assert.deepEqual(r.body.findings, []);
 });
 
+test('POST /sync/incremental 200 with the use-case summary', async () => {
+  const runIncrementalSync = { execute: async ({ gateway }) => ({ since: '2026-07-03 00:00:00', newWatermark: '2026-07-03 11:45:00', scanned: 3, inserted: 1, updated: 1, skipped: 1 }) };
+  const app = createApp({
+    larkAuth: passAuth,
+    baseController: { init: (_r, res) => res.status(404).end(), removePartitions: (_r, res) => res.status(404).end(), status: (_r, res) => res.status(404).end() },
+    syncController: new SyncController({ enqueueFullSync: fakeEnqueue, getFullSyncStatus: { execute: async () => ({}) }, runIncrementalSync }),
+  });
+  const r = await request(app, { method: 'POST', path: '/sync/incremental', body: {} });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.scanned, 3);
+  assert.equal(r.body.inserted, 1);
+  assert.equal(r.body.newWatermark, '2026-07-03 11:45:00');
+});
+
 test('POST /sync/full/heal 400 when year missing', async () => {
   const app = createApp({
     larkAuth: passAuth,
