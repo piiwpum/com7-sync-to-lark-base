@@ -88,6 +88,11 @@ export function createMappingRepository(pool) {
     return found;
   }
 
+  /** Delete a state row entirely (setState can't null fields — it COALESCEs). */
+  async function clearState({ scope }) {
+    await pool.query('DELETE FROM sync_state WHERE scope = ?', [scope]);
+  }
+
   async function getState(scope) {
     const [rows] = await pool.query(
       'SELECT scope, last_utime, last_id, checkpoint, last_run_at, status FROM sync_state WHERE scope=?',
@@ -196,7 +201,7 @@ export function createMappingRepository(pool) {
   }
 
   return {
-    reserveSlots, saveMappings, findByKeys, getState, setState, updatePartitionBoundary,
+    reserveSlots, saveMappings, findByKeys, getState, setState, clearState, updatePartitionBoundary,
     listPartitions, getMappingsForPartition, setFillCount, getOpenPartition,
     clearYearMappings, resetPartitionsForYear,
   };

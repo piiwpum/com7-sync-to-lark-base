@@ -42,6 +42,11 @@ export class MappingRepository {
     throw new Error('MappingRepository.setState not implemented');
   }
 
+  /** Delete a state row entirely (setState only patches, it can't null a field). @param {{scope:string}} q */
+  async clearState(q) {
+    throw new Error('MappingRepository.clearState not implemented');
+  }
+
   /**
    * Records the first and/or last record written into a partition
    * (sync-architecture.md §7 / migration 006) — monitoring/debug only.

@@ -243,6 +243,14 @@ test('findByKeys with an empty list does not query the database', async () => {
   assert.equal(conn.calls.length, 0);
 });
 
+test('clearState deletes the sync_state row for a scope', async () => {
+  const conn = fakeConnection(() => [{}]);
+  const repo = createMappingRepository(fakePool(conn));
+  await repo.clearState({ scope: 'full_sync:2026' });
+  assert.match(conn.calls[0].sql, /DELETE FROM sync_state WHERE scope\s*=\s*\?/);
+  assert.deepEqual(conn.calls[0].params, ['full_sync:2026']);
+});
+
 test('clearYearMappings deletes every sync_mapping row for the year', async () => {
   const conn = fakeConnection(() => [{ affectedRows: 3 }]);
   const repo = createMappingRepository(fakePool(conn));
