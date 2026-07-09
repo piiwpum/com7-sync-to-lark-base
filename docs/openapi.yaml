@@ -12,6 +12,7 @@ info:
     - `/sync/full*` — backfill ทั้งปี (ครั้งแรก/เพิ่มปีย้อนหลัง) + ตรวจ/ซ่อม
     - `/sync/incremental` — ดึงเฉพาะที่ใหม่/เปลี่ยน (รันบ่อย)
     - `/sync/hard-full` — ล้างทั้งปีแล้ว rebuild (กู้ตอนพังหนัก)
+    - `/sync/clear-partitions` — ล้างทั้งปี **ไม่ rebuild** (clear-only)
 
 servers:
   - url: http://localhost:3000
@@ -291,6 +292,30 @@ paths:
         **คืออะไร:** **ลบ record ทั้งหมด**ของปีบน Lark + เคลียร์ mapping/state → แล้ว enqueue backfill ใหม่ (คง table + สูตรไว้)
         **เอาไว้ทำอะไร:** กู้ตอนข้อมูลพังหนักจน /heal ซ่อมไม่ไหว — "เผาทิ้งแล้วสร้างใหม่"
         **ใช้ตอนไหน:** ทางเลือกสุดท้าย. เป็น **background job** (ต้องมี worker) + ใช้เวลานาน (ลบล้าน + สร้างล้าน)
+        > ⚠️ ทำลายข้อมูลจริง — บังคับ `confirm: true` ใน body
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [year, confirm]
+              properties:
+                year: { type: integer, example: 2026 }
+                confirm: { type: boolean, example: true, description: "ต้องเป็น true เป๊ะ ไม่งั้น 400" }
+      responses:
+        "202": { description: enqueued, content: { application/json: { schema: { $ref: "#/components/schemas/JobSummary" } } } }
+        "400": { description: "year ไม่ใช่ integer หรือ confirm ≠ true" }
+        "404": { description: ปียังไม่ provision }
+
+  /sync/clear-partitions:
+    post:
+      tags: [Recovery]
+      summary: "🔴 ล้างทั้งปี ไม่ rebuild (clear-only)"
+      description: |
+        **คืออะไร:** เหมือน `/sync/hard-full` — **ลบ record ทั้งหมด**ของปีบน Lark + เคลียร์ mapping/state (คง table + สูตรไว้) — **แต่ไม่ enqueue backfill** ต่อ ปีจึงว่างเปล่า
+        **เอาไว้ทำอะไร:** ล้างข้อมูลปีทิ้งอย่างเดียว โดยไม่เติมใหม่ (เช่น จะเลิกใช้ปีนั้น หรือจะ backfill เองภายหลังด้วย `/sync/full`)
+        **ใช้ตอนไหน:** เป็น **background job** (ต้องมี worker) + ใช้เวลานาน (ลบล้าน). year status ยังเป็น `complete`; `full_sync` checkpoint ถูก reset ให้เริ่มสะอาด
         > ⚠️ ทำลายข้อมูลจริง — บังคับ `confirm: true` ใน body
       requestBody:
         required: true

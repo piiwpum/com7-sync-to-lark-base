@@ -8,5 +8,6 @@ export function syncRoutes({ larkAuth, syncController }) {
   router.post('/full/heal', larkAuth, syncController.heal);
   router.post('/incremental', larkAuth, syncController.incremental);
   router.post('/hard-full', larkAuth, syncController.hardFull);
+  router.post('/clear-partitions', larkAuth, syncController.clearPartitions);
   return router;
 }

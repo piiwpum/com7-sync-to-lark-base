@@ -1,26 +1,25 @@
 import { clearYear } from './clearYear.js';
 
 /**
- * Hard full sync (disaster recovery) — CLEAR then REBUILD. For a year whose
- * Lark data is corrupted beyond surgical heal, this reuses the shared
- * `clearYear` core (empties every partition table on Lark + wipes the ops side,
- * keeping the tables and their manual formulas), then hands off to a normal
- * `full_sync` job so the existing backfill engine re-populates the year from
- * Com7 (spec: docs/superpowers/plans/2026-07-08-hard-full-sync.md).
+ * Clear partitions — like hard-full-sync but CLEAR ONLY, no rebuild. Empties
+ * every partition table on Lark and wipes the ops side for the year (via the
+ * shared `clearYear` core), leaving the tables + their manual formulas intact
+ * and the year empty. Unlike RunHardFullSyncJob it does NOT enqueue a
+ * follow-up full_sync — nothing is re-inserted. The year's provisioning stays
+ * `complete` (tables still exist); a later POST /sync/full would re-populate it
+ * from a clean slate (clearYear already reset the full_sync checkpoint).
  *
- * The clear-only sibling is RunClearPartitionsJob (same core, no rebuild).
  * Destructive + long: runs on the worker, resumable, creds in job payload.
  */
-export class RunHardFullSyncJob {
+export class RunClearPartitionsJob {
   constructor({
-    mappingRepository, yearRepository, jobQueue, enqueueFullSync,
+    mappingRepository, yearRepository, jobQueue,
     tokenCache, createGateway, baseDomain,
     deleteChunkSize = 500, maxAttempts = 5, retryDelayMs = 60000, now = Date.now,
   }) {
     this.mappingRepository = mappingRepository;
     this.yearRepository = yearRepository;
     this.jobQueue = jobQueue;
-    this.enqueueFullSync = enqueueFullSync;
     this.tokenCache = tokenCache;
     this.createGateway = createGateway;
     this.baseDomain = baseDomain;
@@ -33,7 +32,7 @@ export class RunHardFullSyncJob {
   async execute(job) {
     const { id, year, attempts, payload } = job;
     const { appId, appSecret } = payload;
-    const scope = `hard_full:${year}`;
+    const scope = `clear_partitions:${year}`;
 
     try {
       await clearYear({
@@ -46,17 +45,15 @@ export class RunHardFullSyncJob {
         deleteChunkSize: this.deleteChunkSize,
       });
 
-      // Phase 2: reuse the normal backfill engine to re-populate the year.
-      await this.enqueueFullSync.execute({ year, appId, appSecret });
-
-      await this.mappingRepository.clearState({ scope }); // done — drop our own checkpoint
+      // No rebuild — clear only. Drop our own checkpoint and finish.
+      await this.mappingRepository.clearState({ scope });
       await this.jobQueue.complete({ id, payload: { appId } }); // scrub appSecret
     } catch (err) {
       if (attempts >= this.maxAttempts) {
-        console.error(`[RunHardFullSyncJob] job ${id} attempt ${attempts}/${this.maxAttempts} -> dead:`, err);
+        console.error(`[RunClearPartitionsJob] job ${id} attempt ${attempts}/${this.maxAttempts} -> dead:`, err);
         await this.jobQueue.fail({ id, payload: { appId } });
       } else {
-        console.error(`[RunHardFullSyncJob] job ${id} attempt ${attempts}/${this.maxAttempts} -> retry:`, err);
+        console.error(`[RunClearPartitionsJob] job ${id} attempt ${attempts}/${this.maxAttempts} -> retry:`, err);
         await this.jobQueue.retry({ id, runAfter: new Date(this.now() + this.retryDelayMs) });
       }
       throw err;

@@ -117,6 +117,29 @@ test('POST /sync/hard-full 202 with the job summary when confirmed', async () =>
   assert.equal(r.body.jobId, 42);
 });
 
+test('POST /sync/clear-partitions 400 when confirm is not true', async () => {
+  const enqueueClearPartitions = { execute: async () => { throw new Error('must not run without confirm'); } };
+  const app = createApp({
+    larkAuth: passAuth,
+    baseController: { init: (_r, res) => res.status(404).end(), removePartitions: (_r, res) => res.status(404).end(), status: (_r, res) => res.status(404).end() },
+    syncController: new SyncController({ enqueueFullSync: fakeEnqueue, getFullSyncStatus: { execute: async () => ({}) }, enqueueClearPartitions }),
+  });
+  const r = await request(app, { method: 'POST', path: '/sync/clear-partitions', body: { year: 2026 } });
+  assert.equal(r.status, 400);
+});
+
+test('POST /sync/clear-partitions 202 with the job summary when confirmed', async () => {
+  const enqueueClearPartitions = { execute: async ({ year }) => ({ year, jobId: 77, status: 'ready' }) };
+  const app = createApp({
+    larkAuth: passAuth,
+    baseController: { init: (_r, res) => res.status(404).end(), removePartitions: (_r, res) => res.status(404).end(), status: (_r, res) => res.status(404).end() },
+    syncController: new SyncController({ enqueueFullSync: fakeEnqueue, getFullSyncStatus: { execute: async () => ({}) }, enqueueClearPartitions }),
+  });
+  const r = await request(app, { method: 'POST', path: '/sync/clear-partitions', body: { year: 2026, confirm: true } });
+  assert.equal(r.status, 202);
+  assert.equal(r.body.jobId, 77);
+});
+
 test('POST /sync/incremental 409 with the missing years when a year is unprovisioned', async () => {
   const runIncrementalSync = { execute: async () => { throw new YearsNotProvisionedError([2015, 2027]); } };
   const app = createApp({

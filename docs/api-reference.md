@@ -32,6 +32,7 @@ Base URL (local): `http://localhost:3000`
 | `POST /sync/full/heal` | ซ่อม drift เฉพาะจุด | แก้ส่วนต่าง (ผ่าตัด) | หลัง /check เจอ finding |
 | `POST /sync/incremental` | กวาดใหม่+อัปเดต (UTime>watermark) | sync ต่อเนื่อง โหลดเบา | ยิงซ้ำตามรอบ (15น–1วัน) |
 | `POST /sync/hard-full` 🔴 | ล้างทั้งปี+rebuild (async job) | กู้ตอนพังหนัก ซ่อมไม่ไหว | ทางเลือกสุดท้าย (confirm:true) |
+| `POST /sync/clear-partitions` 🔴 | ล้างทั้งปี **ไม่ rebuild** (async job) | ล้างข้อมูลปีทิ้งอย่างเดียว | เลิกใช้ปีนั้น/จะ backfill เองภายหลัง (confirm:true) |
 
 ---
 
@@ -41,14 +42,15 @@ Base URL (local): `http://localhost:3000`
 เพิ่มปีใหม่:   /base/init  →  /sync/full  →  /sync/full/status (ตามงาน)
 ใช้งานประจำ:   /sync/incremental   (ยิงวนตามรอบ)
 ตรวจ / ซ่อม:   /sync/full/check  →  /sync/full/heal
-พังหนัก:       /sync/hard-full { confirm:true }   ← reset ทั้งปี
+พังหนัก:       /sync/hard-full { confirm:true }   ← reset ทั้งปี (ล้าง+rebuild)
+ล้างทิ้ง:      /sync/clear-partitions { confirm:true }   ← ล้างทั้งปี ไม่ rebuild
 ```
 
 ---
 
 ## หมายเหตุแยกประเภท
 
-- **async (background job — ต้องมี worker รัน):** `/sync/full`, `/sync/hard-full` → คืน `jobId` (สถานะ `202`), ไปทำงานเบื้องหลัง ตามผลด้วย `/sync/full/status`
+- **async (background job — ต้องมี worker รัน):** `/sync/full`, `/sync/hard-full`, `/sync/clear-partitions` → คืน `jobId` (สถานะ `202`), ไปทำงานเบื้องหลัง ตามผลด้วย `/sync/full/status`
 - **sync (รอผลในคำขอเลย):** `/sync/incremental`, `/base/*`, `/sync/full/check`, `/sync/full/heal`
 
 ---
@@ -326,6 +328,41 @@ curl -X POST http://localhost:3000/sync/incremental \
 **Error `400` (ไม่ได้ยืนยัน)**
 ```json
 { "error": "hard-full-sync deletes all records for the year; pass { \"confirm\": true } to proceed" }
+```
+
+**Error `400` (year ไม่ใช่ integer)**
+```json
+{ "error": "year must be an integer year (CE)" }
+```
+
+**Error `404` (ปียังไม่ provision)**
+```json
+{ "error": "year not provisioned: 2026" }
+```
+
+---
+
+## 11. `POST /sync/clear-partitions` 🔴
+
+- **คืออะไร:** เหมือน `/sync/hard-full` — **ลบ record ทั้งหมด**ของปีบน Lark + เคลียร์ mapping/state (คง table + สูตรไว้) — **แต่ไม่ enqueue backfill** ต่อ ปีจึงว่างเปล่า
+- **เอาไว้ทำอะไร:** ล้างข้อมูลปีทิ้งอย่างเดียว โดยไม่เติมใหม่ (เช่น เลิกใช้ปีนั้น หรือจะ backfill เองภายหลังด้วย `/sync/full`)
+- **ใช้ตอนไหน:** **background job** (ต้องมี worker) + ใช้เวลานาน (ลบล้าน). ต่างจาก hard-full ตรงไม่มีขั้น rebuild
+- **หลังล้าง:** year status ยังเป็น `complete` (ตารางยังอยู่); `full_sync` checkpoint ถูก reset — ยิง `/sync/full` ทีหลังจะเริ่ม backfill จากศูนย์
+- ⚠️ ทำลายข้อมูลจริง — บังคับ `confirm: true`
+
+**Request**
+```json
+{ "year": 2026, "confirm": true }
+```
+
+**Response `202`**
+```json
+{ "year": 2026, "jobId": 77, "status": "ready" }
+```
+
+**Error `400` (ไม่ได้ยืนยัน)**
+```json
+{ "error": "clear-partitions deletes all records for the year; pass { \"confirm\": true } to proceed" }
 ```
 
 **Error `400` (year ไม่ใช่ integer)**

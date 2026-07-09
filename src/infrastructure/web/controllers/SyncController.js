@@ -3,13 +3,14 @@ import { YearNotProvisionedError, YearsNotProvisionedError } from '../../../doma
 const DEFAULT_BUDGET_MS = 600000; // soft time budget per call; override via config/env
 
 export class SyncController {
-  constructor({ enqueueFullSync, getFullSyncStatus, checkFullSync, healFullSync, runIncrementalSync, enqueueHardFullSync, budgetMs = DEFAULT_BUDGET_MS }) {
+  constructor({ enqueueFullSync, getFullSyncStatus, checkFullSync, healFullSync, runIncrementalSync, enqueueHardFullSync, enqueueClearPartitions, budgetMs = DEFAULT_BUDGET_MS }) {
     this.enqueueFullSync = enqueueFullSync;
     this.getFullSyncStatus = getFullSyncStatus;
     this.checkFullSync = checkFullSync;
     this.healFullSync = healFullSync;
     this.runIncrementalSync = runIncrementalSync;
     this.enqueueHardFullSync = enqueueHardFullSync;
+    this.enqueueClearPartitions = enqueueClearPartitions;
     this.budgetMs = budgetMs;
   }
 
@@ -25,6 +26,26 @@ export class SyncController {
     }
     try {
       const summary = await this.enqueueHardFullSync.execute({ year, appId: req.larkAppId, appSecret: req.larkAppSecret });
+      res.status(202).json(summary);
+    } catch (err) {
+      if (err instanceof YearNotProvisionedError) return res.status(404).json({ error: err.message });
+      next(err);
+    }
+  };
+
+  // POST /sync/clear-partitions — DESTRUCTIVE: wipe a year's Lark records + ops
+  // mapping, keeping the tables/formulas. Unlike hard-full it does NOT re-sync.
+  // Guarded by an explicit `confirm: true` in the body.
+  clearPartitions = async (req, res, next) => {
+    const year = req.body?.year;
+    if (!Number.isInteger(year)) {
+      return res.status(400).json({ error: 'year must be an integer year (CE)' });
+    }
+    if (req.body?.confirm !== true) {
+      return res.status(400).json({ error: 'clear-partitions deletes all records for the year; pass { "confirm": true } to proceed' });
+    }
+    try {
+      const summary = await this.enqueueClearPartitions.execute({ year, appId: req.larkAppId, appSecret: req.larkAppSecret });
       res.status(202).json(summary);
     } catch (err) {
       if (err instanceof YearNotProvisionedError) return res.status(404).json({ error: err.message });

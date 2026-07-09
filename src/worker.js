@@ -10,6 +10,7 @@ import { createTokenCache } from './infrastructure/lark/tokenCache.js';
 import { createLarkGateway } from './infrastructure/lark/LarkGatewayHttp.js';
 import { RunFullSyncJob } from './application/use-cases/RunFullSyncJob.js';
 import { RunHardFullSyncJob } from './application/use-cases/RunHardFullSyncJob.js';
+import { RunClearPartitionsJob } from './application/use-cases/RunClearPartitionsJob.js';
 import { EnqueueFullSync } from './application/use-cases/EnqueueFullSync.js';
 
 /**
@@ -48,8 +49,21 @@ async function main() {
     baseDomain: config.lark.baseDomain,
   });
 
+  const runClearPartitionsJob = new RunClearPartitionsJob({
+    mappingRepository,
+    yearRepository,
+    jobQueue,
+    tokenCache,
+    createGateway: createLarkGateway,
+    baseDomain: config.lark.baseDomain,
+  });
+
   // Dispatch a claimed job to the handler for its type.
-  const runners = { full_sync: runFullSyncJob, hard_full_sync: runHardFullSyncJob };
+  const runners = {
+    full_sync: runFullSyncJob,
+    hard_full_sync: runHardFullSyncJob,
+    clear_partitions: runClearPartitionsJob,
+  };
 
   let shuttingDown = false;
   process.on('SIGINT', () => { shuttingDown = true; });
