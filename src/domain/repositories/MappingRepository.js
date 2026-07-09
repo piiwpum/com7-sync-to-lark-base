@@ -107,6 +107,15 @@ export class MappingRepository {
   }
 
   /**
+   * Delete mapping rows for specific partitions of a year — remove-partitions
+   * clears only the partitions it actually dropped on Lark (within the time
+   * budget), so a partial run leaves no orphan mappings. @param {{year:number, partitionNos:number[]}} q
+   */
+  async deleteMappingsForPartitions(q) {
+    throw new Error('MappingRepository.deleteMappingsForPartitions not implemented');
+  }
+
+  /**
    * Reset a year's partitions to empty (fill_count=0, boundaries NULL) while
    * KEEPING lark_table_id — the tables/formulas survive a hard-full rebuild.
    * @param {{year:number}} q

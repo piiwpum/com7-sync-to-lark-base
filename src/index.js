@@ -52,7 +52,7 @@ async function bootstrap() {
     parsePartitionNo,
     yearRepository,
   });
-  const removeAllPartitions = new RemoveAllPartitions({ parsePartitionNo, yearRepository });
+  const removeAllPartitions = new RemoveAllPartitions({ parsePartitionNo, yearRepository, mappingRepository });
   const getBaseStatus = new GetBaseStatus({ partitionCount: PARTITION_COUNT, yearRepository });
   const baseController = new BaseController({
     provisionYearBase, removeAllPartitions, getBaseStatus, budgetMs: config.baseInit.budgetMs,
