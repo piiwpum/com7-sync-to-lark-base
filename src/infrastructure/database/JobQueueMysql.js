@@ -84,5 +84,14 @@ export function createJobQueue(pool) {
     return rows.length === 0 ? null : mapRow(rows[0]);
   }
 
-  return { enqueue, claim, complete, fail, retry, findActive, findLatest };
+  async function listActive({ types }) {
+    if (types.length === 0) return [];
+    const [rows] = await pool.query(
+      `SELECT * FROM job_queue WHERE type IN (?) AND status IN ('ready','claimed') ORDER BY id`,
+      [types],
+    );
+    return rows.map(mapRow);
+  }
+
+  return { enqueue, claim, complete, fail, retry, findActive, findLatest, listActive };
 }

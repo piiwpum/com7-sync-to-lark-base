@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { RunIncrementalSync } from '../../src/application/use-cases/RunIncrementalSync.js';
 import { crc32 } from '../../src/domain/services/checksum.js';
 import { transformItecRow } from '../../src/domain/services/transformItecRow.js';
-import { YearsNotProvisionedError } from '../../src/domain/errors.js';
+import { BackgroundSyncJobRunningError } from '../../src/domain/errors.js';
 
 // A raw Com7 row (BE datetimes, Bangkok wall clock).
 function row(sellId, rowNo, uTimeBE = '2569-07-03 09:00:00', crTimeBE = '2569-02-01 00:00:00') {
@@ -12,12 +12,12 @@ function row(sellId, rowNo, uTimeBE = '2569-07-03 09:00:00', crTimeBE = '2569-02
 const keyOf = (r) => `${r.SellBranch}|${r.SellID}|${r.RowNo}`;
 const checksumOf = (r) => crc32(JSON.stringify(transformItecRow(r)));
 
-function makeDeps({ rows = [], state = null, existing = new Map(), reserveSlotsImpl, unprovisioned = [], incompleteYears = [], chunkSize = 1000 } = {}) {
+function makeDeps({ rows = [], state = null, existing = new Map(), reserveSlotsImpl, unprovisioned = [], incompleteYears = [], chunkSize = 1000, activeJobs = [] } = {}) {
   const unprovisionedSet = new Set(unprovisioned);
   const incompleteSet = new Set(incompleteYears);
   const calls = {
     fetchSince: [], findByKeys: [], reserveSlots: [], batchCreate: [], batchUpdate: [],
-    saveMappings: [], setState: [], boundary: [],
+    saveMappings: [], setState: [], boundary: [], listActive: [],
   };
   const gateway = {
     async batchCreate(q) { calls.batchCreate.push(q); return q.records.map((_, i) => `newrec_${calls.batchCreate.length}_${i}`); },
@@ -44,6 +44,12 @@ function makeDeps({ rows = [], state = null, existing = new Map(), reserveSlotsI
         return { year, baseId: `BASE_${year}`, status: incompleteSet.has(year) ? 'provisioning' : 'complete' };
       },
     },
+    jobQueue: {
+      async listActive(q) {
+        calls.listActive.push(q);
+        return activeJobs;
+      },
+    },
     defaultSince: '2026-07-03 00:00:00',
     chunkSize,
     now: () => Date.UTC(2026, 6, 3, 5, 0, 0), // fixed
@@ -55,8 +61,10 @@ test('empty state seeds the watermark from defaultSince', async () => {
   const { deps, calls } = makeDeps({ rows: [] });
   const uc = new RunIncrementalSync(deps);
   const res = await uc.execute({ gateway: {} });
+  assert.equal(calls.listActive.length, 1);
+  assert.deepEqual(calls.listActive[0].types, ['full_sync', 'hard_full_sync', 'clear_partitions']);
   assert.equal(calls.fetchSince[0].since, '2026-07-03 00:00:00');
-  assert.deepEqual(res, { since: '2026-07-03 00:00:00', newWatermark: '2026-07-03 00:00:00', scanned: 0, inserted: 0, updated: 0, skipped: 0 });
+  assert.deepEqual(res, { since: '2026-07-03 00:00:00', newWatermark: '2026-07-03 00:00:00', scanned: 0, inserted: 0, updated: 0, skipped: 0, ignoredRows: 0, ignoredYears: [] });
   assert.equal(calls.setState.length, 0); // nothing scanned -> no watermark write
 });
 
@@ -109,7 +117,7 @@ test('a changed row (checksum differs) is updated to the existing record, not re
   assert.equal(saved[0].larkRecordId, 'recExisting');
   assert.equal(saved[0].partitionNo, 5);
   assert.equal(saved[0].checksum, checksumOf(r));
-  assert.deepEqual(res, { since: '2026-07-03 00:00:00', newWatermark: '2026-07-03 09:00:00', scanned: 1, inserted: 0, updated: 1, skipped: 0 });
+  assert.deepEqual(res, { since: '2026-07-03 00:00:00', newWatermark: '2026-07-03 09:00:00', scanned: 1, inserted: 0, updated: 1, skipped: 0, ignoredRows: 0, ignoredYears: [] });
 });
 
 test('an unchanged row (checksum equal) is skipped — no Lark call', async () => {
@@ -155,37 +163,68 @@ test('watermark advances to the max UTime processed (as CE), stamped once for a 
   assert.equal(calls.setState[0].patch.lastUtime, '2026-07-03 11:45:00');
 });
 
-test('aborts without writing anything when a row belongs to an unprovisioned year', async () => {
+test('skips unprovisioned-year rows and processes the rest', async () => {
   const r2026 = row(1, 1, '2569-07-03 09:00:00', '2569-06-01 00:00:00'); // CE 2026 (provisioned)
   const r2015 = row(2, 1, '2569-07-03 09:10:00', '2558-06-01 00:00:00'); // CE 2015 (NOT provisioned)
   const { deps, calls, gateway } = makeDeps({ rows: [r2026, r2015], unprovisioned: [2015] });
   const uc = new RunIncrementalSync(deps);
 
-  await assert.rejects(() => uc.execute({ gateway }), (err) => {
-    assert.ok(err instanceof YearsNotProvisionedError);
-    assert.deepEqual(err.years, [2015]);
-    return true;
-  });
-  // Nothing was written anywhere — not Lark, not ops mapping, not the watermark.
-  assert.equal(calls.batchCreate.length, 0);
-  assert.equal(calls.batchUpdate.length, 0);
-  assert.equal(calls.reserveSlots.length, 0);
-  assert.equal(calls.saveMappings.length, 0);
-  assert.equal(calls.setState.length, 0);
+  const res = await uc.execute({ gateway });
+  assert.equal(res.scanned, 2);
+  assert.equal(res.inserted, 1);
+  assert.equal(res.ignoredRows, 1);
+  assert.deepEqual(res.ignoredYears, [2015]);
+  assert.equal(res.newWatermark, '2026-07-03 09:10:00'); // max UTime includes ignored row
+  assert.equal(calls.batchCreate.length, 1);
+  assert.equal(calls.batchCreate[0].baseId, 'BASE_2026');
+  assert.equal(calls.setState.length, 1);
+  assert.equal(calls.setState[0].patch.lastUtime, '2026-07-03 09:10:00');
 });
 
-test('reports every missing year (unprovisioned or not yet complete), sorted', async () => {
+test('reports every ignored year (unprovisioned or not yet complete), sorted', async () => {
   const rows = [
     row(1, 1, '2569-07-03 09:00:00', '2569-06-01 00:00:00'), // 2026 ok
     row(2, 1, '2569-07-03 09:10:00', '2558-06-01 00:00:00'), // 2015 missing
     row(3, 1, '2569-07-03 09:20:00', '2570-06-01 00:00:00'), // 2027 provisioning (incomplete)
   ];
-  const { deps, gateway } = makeDeps({ rows, unprovisioned: [2015], incompleteYears: [2027] });
+  const { deps, calls, gateway } = makeDeps({ rows, unprovisioned: [2015], incompleteYears: [2027] });
   const uc = new RunIncrementalSync(deps);
+  const res = await uc.execute({ gateway });
+  assert.deepEqual(res.ignoredYears, [2015, 2027]);
+  assert.equal(res.ignoredRows, 2);
+  assert.equal(res.inserted, 1);
+  assert.equal(calls.batchCreate.length, 1);
+  assert.equal(calls.setState.length, 1);
+});
+
+test('when every row is unprovisioned, advances watermark without Lark writes', async () => {
+  const r2015 = row(1, 1, '2569-07-03 09:00:00', '2558-06-01 00:00:00');
+  const { deps, calls, gateway } = makeDeps({ rows: [r2015], unprovisioned: [2015] });
+  const uc = new RunIncrementalSync(deps);
+  const res = await uc.execute({ gateway });
+  assert.equal(res.scanned, 1);
+  assert.equal(res.inserted, 0);
+  assert.equal(res.ignoredRows, 1);
+  assert.deepEqual(res.ignoredYears, [2015]);
+  assert.equal(res.newWatermark, '2026-07-03 09:00:00');
+  assert.equal(calls.batchCreate.length, 0);
+  assert.equal(calls.setState.length, 1);
+});
+
+test('rejects when a background sync job is active (full_sync / hard_full_sync / clear_partitions)', async () => {
+  const r = row(1, 1);
+  const activeJobs = [{ id: 9, type: 'hard_full_sync', year: 2026, status: 'claimed' }];
+  const { deps, calls, gateway } = makeDeps({ rows: [r], activeJobs });
+  const uc = new RunIncrementalSync(deps);
+
   await assert.rejects(() => uc.execute({ gateway }), (err) => {
-    assert.deepEqual(err.years, [2015, 2027]);
+    assert.ok(err instanceof BackgroundSyncJobRunningError);
+    assert.deepEqual(err.jobs, [{ jobId: 9, year: 2026, status: 'claimed', type: 'hard_full_sync' }]);
     return true;
   });
+  assert.equal(calls.fetchSince.length, 0);
+  assert.equal(calls.batchCreate.length, 0);
+  assert.equal(calls.setState.length, 0);
 });
 
 test('drains a backlog larger than chunkSize in ONE call, checkpointing per chunk', async () => {

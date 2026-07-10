@@ -130,3 +130,23 @@ test('findLatest returns the most recent job regardless of status', async () => 
   assert.equal(job.status, 'done');
   assert.match(conn.calls[0].sql, /ORDER BY id DESC/);
 });
+
+test('listActive returns all ready/claimed jobs matching the given types', async () => {
+  const conn = fakeConnection(() => [[
+    { id: 1, type: 'full_sync', year: 2025, partition_no: null, payload: null, status: 'claimed', attempts: 0, run_after: null, created_at: null, claimed_at: null },
+    { id: 2, type: 'clear_partitions', year: 2026, partition_no: null, payload: null, status: 'ready', attempts: 0, run_after: null, created_at: null, claimed_at: null },
+  ]]);
+  const jq = createJobQueue(fakePool(conn));
+  const jobs = await jq.listActive({ types: ['full_sync', 'hard_full_sync', 'clear_partitions'] });
+  assert.equal(jobs.length, 2);
+  assert.match(conn.calls[0].sql, /type IN \(\?\)/);
+  assert.match(conn.calls[0].sql, /status IN \('ready','claimed'\)/);
+  assert.deepEqual(conn.calls[0].params[0], ['full_sync', 'hard_full_sync', 'clear_partitions']);
+});
+
+test('listActive returns an empty array when types is empty', async () => {
+  const conn = fakeConnection(() => { throw new Error('should not query'); });
+  const jq = createJobQueue(fakePool(conn));
+  assert.deepEqual(await jq.listActive({ types: [] }), []);
+  assert.equal(conn.calls.length, 0);
+});

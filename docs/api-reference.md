@@ -297,14 +297,24 @@ curl -X POST http://localhost:3000/sync/incremental \
 
 **Response `200`**
 ```json
-{ "since": "2026-07-03 00:00:00", "newWatermark": "2026-07-08 21:58:10", "scanned": 1023, "inserted": 300, "updated": 0, "skipped": 723 }
+{ "since": "2026-07-03 00:00:00", "newWatermark": "2026-07-08 21:58:10", "scanned": 1023, "inserted": 300, "updated": 0, "skipped": 723, "ignoredRows": 0, "ignoredYears": [] }
 ```
 > รอบถัดไปถ้าไม่มีอะไรเปลี่ยน: `scanned` น้อย/0, `inserted`+`updated` = 0
 
-**Error `409` (มีข้อมูลของปีที่ยังไม่ provision — ไม่เขียนอะไรเลย)**
+แถวที่ `CrTime` ชี้ไปปีที่ยังไม่ provision (`sync_year` ไม่มีหรือ `status !== 'complete'`) จะถูก **ข้าม** — ไม่ sync ทาง incremental แต่ watermark ยังเลื่อนผ่านแถวเหล่านั้น (ต้อง `POST /sync/init` backfill ทีหลังถ้าต้องการข้อมูลปีนั้น):
+
 ```json
-{ "error": "years not provisioned (no Lark base): 2015, 2027", "years": [2015, 2027] }
+{ "since": "2026-07-03 00:00:00", "newWatermark": "2026-07-08 21:58:10", "scanned": 50, "inserted": 10, "updated": 0, "skipped": 0, "ignoredRows": 40, "ignoredYears": [2015, 2027] }
 ```
+
+**Error `409` (มี background job กำลังรัน — `full_sync` / `hard_full_sync` / `clear_partitions`)**
+```json
+{
+  "error": "background sync job is running",
+  "jobs": [{ "jobId": 42, "year": 2026, "status": "claimed", "type": "full_sync" }]
+}
+```
+> ไม่ดึง Com7 / ไม่เลื่อน watermark — รอ job จบแล้วยิง incremental ใหม่
 
 ---
 

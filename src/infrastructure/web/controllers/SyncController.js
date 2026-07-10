@@ -1,4 +1,4 @@
-import { YearNotProvisionedError, YearsNotProvisionedError } from '../../../domain/errors.js';
+import { YearNotProvisionedError, BackgroundSyncJobRunningError } from '../../../domain/errors.js';
 
 const DEFAULT_BUDGET_MS = 600000; // soft time budget per call; override via config/env
 
@@ -60,8 +60,8 @@ export class SyncController {
       const summary = await this.runIncrementalSync.execute({ gateway: req.larkGateway });
       res.status(200).json(summary);
     } catch (err) {
-      if (err instanceof YearsNotProvisionedError) {
-        return res.status(409).json({ error: err.message, years: err.years });
+      if (err instanceof BackgroundSyncJobRunningError) {
+        return res.status(409).json({ error: err.message, jobs: err.jobs });
       }
       next(err);
     }

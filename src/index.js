@@ -64,7 +64,7 @@ async function bootstrap() {
   const checkFullSync = new CheckFullSync({ sourceRepository, mappingRepository, yearRepository });
   const healFullSync = new HealFullSync({ sourceRepository, mappingRepository, yearRepository });
   const runIncrementalSync = new RunIncrementalSync({
-    sourceRepository, mappingRepository, yearRepository,
+    sourceRepository, mappingRepository, yearRepository, jobQueue,
     defaultSince: config.incremental.defaultSince, chunkSize: config.incremental.chunkSize,
   });
   const enqueueHardFullSync = new EnqueueHardFullSync({ yearRepository, jobQueue });

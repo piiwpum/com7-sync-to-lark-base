@@ -45,4 +45,9 @@ export class JobQueue {
   async findLatest(q) {
     throw new Error('JobQueue.findLatest not implemented');
   }
+
+  /** All ready/claimed jobs whose type is in `types` (incremental guard). @param {{ types:string[] }} q @returns {Promise<object[]>} */
+  async listActive(q) {
+    throw new Error('JobQueue.listActive not implemented');
+  }
 }

@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { createApp } from '../../../src/infrastructure/web/app.js';
 import { SyncController } from '../../../src/infrastructure/web/controllers/SyncController.js';
-import { YearsNotProvisionedError } from '../../../src/domain/errors.js';
 
 function request(app, { method, path, headers, body }) {
   return new Promise((resolve) => {
@@ -140,8 +139,33 @@ test('POST /sync/clear-partitions 202 with the job summary when confirmed', asyn
   assert.equal(r.body.jobId, 77);
 });
 
-test('POST /sync/incremental 409 with the missing years when a year is unprovisioned', async () => {
-  const runIncrementalSync = { execute: async () => { throw new YearsNotProvisionedError([2015, 2027]); } };
+test('POST /sync/incremental 200 with ignoredYears when some years are unprovisioned', async () => {
+  const runIncrementalSync = {
+    execute: async () => ({
+      since: '2026-07-03 00:00:00', newWatermark: '2026-07-08 21:58:10',
+      scanned: 50, inserted: 10, updated: 0, skipped: 0, ignoredRows: 40, ignoredYears: [2015, 2027],
+    }),
+  };
+  const app = createApp({
+    larkAuth: passAuth,
+    baseController: { init: (_r, res) => res.status(404).end(), removePartitions: (_r, res) => res.status(404).end(), status: (_r, res) => res.status(404).end() },
+    syncController: new SyncController({ enqueueFullSync: fakeEnqueue, getFullSyncStatus: { execute: async () => ({}) }, runIncrementalSync }),
+  });
+  const r = await request(app, { method: 'POST', path: '/sync/incremental', body: {} });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.ignoredYears, [2015, 2027]);
+  assert.equal(r.body.ignoredRows, 40);
+});
+
+test('POST /sync/incremental 409 when a background sync job is running', async () => {
+  const { BackgroundSyncJobRunningError } = await import('../../../src/domain/errors.js');
+  const runIncrementalSync = {
+    execute: async () => {
+      throw new BackgroundSyncJobRunningError([
+        { jobId: 42, year: 2026, status: 'claimed', type: 'full_sync' },
+      ]);
+    },
+  };
   const app = createApp({
     larkAuth: passAuth,
     baseController: { init: (_r, res) => res.status(404).end(), removePartitions: (_r, res) => res.status(404).end(), status: (_r, res) => res.status(404).end() },
@@ -149,7 +173,8 @@ test('POST /sync/incremental 409 with the missing years when a year is unprovisi
   });
   const r = await request(app, { method: 'POST', path: '/sync/incremental', body: {} });
   assert.equal(r.status, 409);
-  assert.deepEqual(r.body.years, [2015, 2027]);
+  assert.equal(r.body.error, 'background sync job is running');
+  assert.deepEqual(r.body.jobs, [{ jobId: 42, year: 2026, status: 'claimed', type: 'full_sync' }]);
 });
 
 test('POST /sync/full/heal 400 when year missing', async () => {

@@ -4,7 +4,10 @@ import { transformItecRow } from '../../domain/services/transformItecRow.js';
 import { crYear } from '../../domain/services/sourceYear.js';
 import { epochMsToUtcDatetimeString, beDatetimeToCeString } from '../../domain/services/dateConversion.js';
 import { Mapping } from '../../domain/entities/Mapping.js';
-import { YearsNotProvisionedError } from '../../domain/errors.js';
+import { BackgroundSyncJobRunningError } from '../../domain/errors.js';
+
+/** Job types that block incremental while ready/claimed (per-year rebuild ops). */
+const INCREMENTAL_BLOCKING_JOB_TYPES = ['full_sync', 'hard_full_sync', 'clear_partitions'];
 
 /**
  * One incremental-sync pass (spec §8.B + §8.C, unified). Pulls rows whose
@@ -13,8 +16,10 @@ import { YearsNotProvisionedError } from '../../domain/errors.js';
  *   - not in sync_mapping        -> insert (reserve slot + batchCreate)
  *   - in mapping, checksum moved -> update the SAME Lark record (batchUpdate)
  *   - in mapping, checksum equal -> skip (already in sync)
- * Finally advances the watermark to the max UTime processed. Never fetches
- * from Lark to resolve ids (§3) — routing reads sync_mapping only.
+ * Rows whose CrTime year has no completed Lark base are ignored (not synced);
+ * the watermark still advances past them — provision + backfill is required to
+ * land that year's data later. Never fetches from Lark to resolve ids (§3) —
+ * routing reads sync_mapping only.
  *
  * Synchronous (runs inside the request), not via job_queue: the watermark is
  * itself the checkpoint, so a budget-truncated / crashed run simply resumes
@@ -28,16 +33,24 @@ import { YearsNotProvisionedError } from '../../domain/errors.js';
  * crash re-does work rather than skipping rows.
  */
 export class RunIncrementalSync {
-  constructor({ sourceRepository, mappingRepository, yearRepository, defaultSince, chunkSize = 1000, now = Date.now }) {
+  constructor({ sourceRepository, mappingRepository, yearRepository, jobQueue, defaultSince, chunkSize = 1000, now = Date.now }) {
     this.sourceRepository = sourceRepository;
     this.mappingRepository = mappingRepository;
     this.yearRepository = yearRepository;
+    this.jobQueue = jobQueue;
     this.defaultSince = defaultSince;
     this.chunkSize = chunkSize;
     this.now = now;
   }
 
   async execute({ gateway }) {
+    const running = await this.jobQueue.listActive({ types: INCREMENTAL_BLOCKING_JOB_TYPES });
+    if (running.length > 0) {
+      throw new BackgroundSyncJobRunningError(running.map((j) => ({
+        jobId: j.id, year: j.year, status: j.status, type: j.type,
+      })));
+    }
+
     const state = await this.mappingRepository.getState('incremental');
     const since = state?.lastUtime ?? this.defaultSince;
 
@@ -46,59 +59,57 @@ export class RunIncrementalSync {
     // scanned exactly once per call regardless of how many Lark batches result.
     const rows = await this.sourceRepository.fetchChangedSince({ since });
     if (rows.length === 0) {
-      return { since, newWatermark: since, scanned: 0, inserted: 0, updated: 0, skipped: 0 };
+      return { since, newWatermark: since, scanned: 0, inserted: 0, updated: 0, skipped: 0, ignoredRows: 0, ignoredYears: [] };
     }
 
     // Capture the next watermark NOW, from the swept data, before any write.
     // It's the max UTime in this batch (rows are UTime-ascending, so the last
-    // one). Using the data's own clock — not server/DB NOW() — avoids any
-    // timezone skew against UTime. Truncated to whole seconds: sync_state
-    // .last_utime is DATETIME; slicing rounds DOWN, safe with the `UTime >=`
-    // query (re-scans at most a same-second row next run, an idempotent skip).
-    // Any row modified DURING this sweep gets a UTime newer than this max, so
-    // the next run's `UTime >= watermark` picks it up — nothing is lost.
+    // one) — including rows we will ignore for unprovisioned years, so those
+    // rows are not re-fetched on the next run (provision + backfill to land them).
+    // Using the data's own clock — not server/DB NOW() — avoids any timezone
+    // skew against UTime. Truncated to whole seconds: sync_state .last_utime is
+    // DATETIME; slicing rounds DOWN, safe with the `UTime >=` query (re-scans at
+    // most a same-second row next run, an idempotent skip). Any row modified
+    // DURING this sweep gets a UTime newer than this max, so the next run's
+    // `UTime >= watermark` picks it up — nothing is lost among processed years.
     const newWatermark = beDatetimeToCeString(rows[rows.length - 1].UTime).slice(0, 19);
 
-    // Pre-check: EVERY year present must have a completed base BEFORE we write
-    // anything. If any row has nowhere to land, abort the whole sweep without
-    // touching Lark, ops mapping, or the watermark — an operator provisions the
-    // missing year(s) and re-runs. Never a partial sync.
     const baseByYear = new Map();
-    const missingYears = [];
+    const ignoredYears = [];
     for (const year of new Set(rows.map((r) => crYear(r)))) {
       const yearRow = await this.yearRepository.getYear(year);
-      if (!yearRow || yearRow.status !== 'complete') missingYears.push(year);
+      if (!yearRow || yearRow.status !== 'complete') ignoredYears.push(year);
       else baseByYear.set(year, yearRow.baseId);
     }
-    if (missingYears.length > 0) {
-      throw new YearsNotProvisionedError(missingYears.sort((a, b) => a - b));
-    }
+    ignoredYears.sort((a, b) => a - b);
 
-    // Drain the whole in-memory backlog in this one call, chunkSize rows at a
-    // time (Lark batch cap / findByKeys IN-clause size). The watermark is NOT
-    // advanced during the loop — only once, after every chunk has been written
-    // (below). A crash mid-sweep therefore leaves the watermark untouched and
-    // the next run re-does the sweep (idempotent) rather than skipping the
-    // unfinished tail.
+    const processableRows = rows.filter((r) => baseByYear.has(crYear(r)));
+    const ignoredRows = rows.length - processableRows.length;
+
+    // Drain processable rows in this one call, chunkSize at a time (Lark batch
+    // cap / findByKeys IN-clause size). The watermark is NOT advanced during the
+    // loop — only once, after every chunk has been written (below). A crash
+    // mid-sweep therefore leaves the watermark untouched and the next run
+    // re-does the sweep (idempotent) rather than skipping the unfinished tail.
     let inserted = 0;
     let updated = 0;
     let skipped = 0;
-    for (let i = 0; i < rows.length; i += this.chunkSize) {
-      const chunk = rows.slice(i, i + this.chunkSize);
+    for (let i = 0; i < processableRows.length; i += this.chunkSize) {
+      const chunk = processableRows.slice(i, i + this.chunkSize);
       const r = await this.#processChunk({ gateway, chunk, baseByYear });
       inserted += r.inserted;
       updated += r.updated;
       skipped += r.skipped;
     }
 
-    // Only now that every row is in Lark + ops mapping do we advance the
-    // watermark — the last step, so it's never ahead of what's actually synced.
+    // Stamp watermark after all processable chunks succeed (or immediately when
+    // every row was ignored — still advances past the unprovisioned backlog).
     await this.mappingRepository.setState('incremental', {
       lastUtime: newWatermark,
       lastRunAt: epochMsToUtcDatetimeString(this.now()),
     });
 
-    return { since, newWatermark, scanned: rows.length, inserted, updated, skipped };
+    return { since, newWatermark, scanned: rows.length, inserted, updated, skipped, ignoredRows, ignoredYears };
   }
 
   // Process one in-memory chunk: group by year, route each row to insert /
@@ -116,6 +127,7 @@ export class RunIncrementalSync {
     let skipped = 0;
     for (const [year, yearRows] of byYear) {
       const baseId = baseByYear.get(year);
+      if (!baseId) continue;
       const keys = yearRows.map((r) => deriveKey(r));
       const existing = await this.mappingRepository.findByKeys({ year, sourceKeys: keys });
 
