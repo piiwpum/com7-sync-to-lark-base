@@ -1,6 +1,6 @@
 import { Mapping } from '../../domain/entities/Mapping.js';
 
-const PARTITION_CAPACITY = 50000;
+const PARTITION_CAPACITY = 20000;
 
 /**
  * MappingRepository adapter over MySQL instance B (sync_partition,

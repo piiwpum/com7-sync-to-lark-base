@@ -181,3 +181,60 @@ curl http://localhost:3000/health
 - ทุก state ของ service อยู่ใน ops DB (B) — ถ้าต้อง reset ทำที่ B เท่านั้น ไม่กระทบ A
 - Lark เป็นปลายทาง one-way — แก้/ลบฝั่ง Lark ได้ผ่าน `/base/remove-partitions`
   โดยจะเคลียร์ `sync_mapping` ของ partition ที่ลบให้ด้วย
+
+---
+
+## 8. Deploy-day: เมื่อ schema จริงไม่ตรง (runbook หน้างาน)
+
+โค้ด **ไม่ crash** เวลา schema ไม่ตรง แต่จะ "ผิดเงียบ ๆ" — column ชื่อไม่ตรงจะถูกเขียนเป็น
+`null` ขึ้น Lark ([transformItecRow.js:12-14](../src/domain/services/transformItecRow.js)) และ
+ปีแบบ ค.ศ. (ทั้งที่โค้ดคิดว่าเป็น พ.ศ.) จะทำให้ query รายปี **ได้ 0 แถวโดยไม่ error**
+เพราะงั้น **ห้ามเดา — รัน pre-flight ก่อนเปิด sync เสมอ**
+
+### 8.1 รัน pre-flight (คำสั่งเดียว)
+
+ตั้ง `COM7_DB_*` ให้ชี้ DB จริงของ Com7 แล้ว:
+
+```bash
+npm run preflight
+```
+
+[scripts/preflight-com7-schema.js](../scripts/preflight-com7-schema.js) เป็น **read-only**
+(SHOW/SELECT อย่างเดียว) เช็คทั้ง 7 ข้อของ §3 ให้อัตโนมัติ สรุปเป็น `✓ / ✗ / !`
+พร้อมบอกไฟล์ที่ต้องแก้ และปิดท้ายด้วย `READY` / `NOT READY` (exit code 1 ถ้ามี `✗`)
+
+ตัวอย่าง output:
+
+```
+Com7 source pre-flight — <host>/<db>
+
+  ✓ 2. payload columns: all 41 present
+  ✗ 5. BE/CE year: CrTime="2026-05-14 ..." -> looks CE, code assumes BE(+543). Fix dateConversion.js ...
+  ✗ 4. cursor index (SellID,RowNo): NO index leads with (SellID,RowNo) ...
+
+NOT READY — 2 fail, 0 warn
+```
+
+### 8.2 ตารางแก้ด่วนตามผล pre-flight
+
+การแก้แบ่งเป็น 2 ระดับ — **A (แก้เองหน้างานได้)** และ **B (หยุด คุยกับทีมก่อน)**
+
+| `✗` ที่เจอ | ระดับ | แก้ไฟล์ | แก้อย่างไร |
+|---|---|---|---|
+| ชื่อ table ไม่ใช่ `itec` / `itec-today` | A | [SourceRepositoryMysql.js](../src/infrastructure/database/SourceRepositoryMysql.js) | แก้ string ชื่อ table (บรรทัด 31, 57-58, 73, 91) |
+| column payload ชื่อไม่ตรง/หาย | A | [itecFieldSchema.js](../src/infrastructure/config/itecFieldSchema.js) | แก้ชื่อใน `RAW` ให้ตรง DB เป๊ะ (รวมตัวพิมพ์/ช่องว่าง เช่น `'MIN PRICE'`) |
+| เป็น ค.ศ. ไม่ใช่ พ.ศ. | A | [dateConversion.js](../src/domain/services/dateConversion.js) + `beYearRange`/`ceDatetimeToBeString` ใน SourceRepositoryMysql.js | ตั้ง `BE_OFFSET_YEARS = 0` (ปิดการ +543) |
+| ไม่มี index (SellID, RowNo) | A | — | ขอ DBA เพิ่ม `ALTER TABLE itec ADD INDEX idx_itec_sell_row (SellID, RowNo);` หรือยอมรับว่า full sync ช้า |
+| user มีสิทธิ์เขียน (WARN) | A | — | ขอปรับ grant ให้เหลือ `SELECT` อย่างเดียว |
+| ไม่มีคอลัมน์ `RowNo` | **B** | `deriveKey.js` + cursor ใน SourceRepositoryMysql.js | **หยุด** — กระทบ identity/cursor ทั้งระบบ คุยกับทีมก่อน |
+| identity `SellBranch\|SellID\|RowNo` ซ้ำ | **B** | `deriveKey.js` | **หยุด** — deriveKey ชนกัน แถวจะทับกันบน Lark ต้องออกแบบ key ใหม่ |
+
+### 8.3 ลำดับหน้างาน
+
+1. `npm run preflight`
+2. `✓` หมด (`READY`) → เดินตาม §4 ต่อได้เลย
+3. เจอ `✗` **ระดับ A** → แก้ตามตาราง → `npm run preflight` ซ้ำ จนขึ้น `READY`
+4. เจอ `✗` **ระดับ B** → หยุด อย่าฝืน deploy เพราะกระทบ identity ของทั้งระบบ
+
+> `!` (WARN) ไม่บล็อกการ deploy แต่ควรอ่านทุกอัน — เช่น "extra source columns" (มี column
+> เกินใน source) นั้นปลอดภัย เพราะโค้ดอ่านเฉพาะ field ใน `RAW` เท่านั้น

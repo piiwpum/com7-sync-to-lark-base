@@ -206,3 +206,43 @@ test('on error with attempts at max: marks the job dead and scrubs the secret', 
   assert.deepEqual(deps._inspect.jobQueueCalls.fail[0], { id: 1, payload: { appId: 'a' } });
   assert.equal(deps._inspect.jobQueueCalls.retry.length, 0);
 });
+
+test('on error with attempts at max: also corrects fill_count before going dead, so a dead job does not strand an over-reservation', async () => {
+  // The exact bug this guards against: reserveSlots commits fill_count for
+  // a chunk (e.g. pushing 50000 -> 50200), but batchCreate then fails
+  // (partition genuinely full/rejected on Lark's side) on every one of the
+  // 5 attempts. A job that dies never runs execute() again, so it would
+  // never reach the self-heal at the top of the method — this is the
+  // heal-before-dead path making sure that still happens.
+  const deps = makeDeps({
+    chunks: [[row(1, 1)]],
+    openPartition: { partitionNo: 3, larkTableId: 'tbl3', fillCount: 50200 },
+    countRecordsImpl: async () => 50000,
+  });
+  deps.mappingRepository.reserveSlots = async () => { throw new Error('lark partition full'); };
+  const uc = new RunFullSyncJob(deps);
+  await assert.rejects(() => uc.execute({ id: 1, year: 2024, attempts: 5, payload: { appId: 'a', appSecret: 's' } }));
+  // The fake getOpenPartition is static (always reports fillCount:50200), so
+  // both the top-of-execute self-heal and the heal-before-dead each see the
+  // same "ahead" state and write the same correction — a real repository
+  // would reflect the first UPDATE and the second heal would be a no-op.
+  // What matters here is that the dead path performed the correction at all.
+  assert.deepEqual(deps._inspect.fillCountWrites, [
+    { year: 2024, partitionNo: 3, fillCount: 50000 },
+    { year: 2024, partitionNo: 3, fillCount: 50000 },
+  ]);
+  assert.equal(deps._inspect.jobQueueCalls.fail.length, 1);
+});
+
+test('on error with attempts at max: heal-before-dead is best-effort — a failing heal still lets the job go dead', async () => {
+  const deps = makeDeps({
+    chunks: [[row(1, 1)]],
+    openPartition: { partitionNo: 3, larkTableId: 'tbl3', fillCount: 50200 },
+    countRecordsImpl: async () => { throw new Error('lark unreachable'); },
+  });
+  deps.mappingRepository.reserveSlots = async () => { throw new Error('lark partition full'); };
+  const uc = new RunFullSyncJob(deps);
+  await assert.rejects(() => uc.execute({ id: 1, year: 2024, attempts: 5, payload: { appId: 'a', appSecret: 's' } }));
+  assert.equal(deps._inspect.jobQueueCalls.fail.length, 1);
+  assert.deepEqual(deps._inspect.fillCountWrites, []);
+});

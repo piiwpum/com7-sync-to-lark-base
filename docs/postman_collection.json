@@ -1,0 +1,448 @@
+{
+  "info": {
+    "_postman_id": "b6e9b6f0-2b1a-4e1a-9c0a-com7-lark-sync",
+    "name": "Com7 → LarkBase Sync API",
+    "description": "Control plane สำหรับ sync ข้อมูลขาย Com7 (MySQL) ขึ้น LarkBase แบบ one-way.\nทุก endpoint (ยกเว้น /health) ต้องแนบ credential ของ Lark app ผ่าน header `X-Lark-App-Id` และ `X-Lark-App-Secret`.\n\nกลุ่มงาน:\n- Base — provision/teardown/status base รายปี\n- Full Sync — backfill ทั้งปี + reconcile (check/heal)\n- Incremental — sync ต่อเนื่อง\n- Recovery — ล้างข้อมูลปี (hard-full rebuild / clear-partitions clear-only)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      {
+        "key": "key",
+        "value": "X-Lark-App-Id",
+        "type": "string"
+      },
+      {
+        "key": "value",
+        "value": "{{larkAppId}}",
+        "type": "string"
+      },
+      {
+        "key": "in",
+        "value": "header",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "larkAppId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "larkAppSecret",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "year",
+      "value": "2026",
+      "type": "string"
+    },
+    {
+      "key": "larkBaseId",
+      "value": "TihrbIr5PaNwI7sS9jFl6gCrgCg",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "GET /health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "Liveness + ping ops DB. ไม่ต้องแนบ credential."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Base",
+      "item": [
+        {
+          "name": "POST /base/init",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Lark-App-Id",
+                "value": "{{larkAppId}}"
+              },
+              {
+                "key": "X-Lark-App-Secret",
+                "value": "{{larkAppSecret}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"year\": {{year}},\n  \"base\": \"{{larkBaseId}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/base/init",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "base",
+                "init"
+              ]
+            },
+            "description": "Provision base รายปี (สร้าง 250 partition table + field). Idempotent + resumable — ยิงซ้ำได้จนครบ."
+          }
+        },
+        {
+          "name": "POST /base/remove-partitions",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Lark-App-Id",
+                "value": "{{larkAppId}}"
+              },
+              {
+                "key": "X-Lark-App-Secret",
+                "value": "{{larkAppSecret}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"year\": {{year}},\n  \"base\": \"{{larkBaseId}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/base/remove-partitions?dryRun=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "base",
+                "remove-partitions"
+              ],
+              "query": [
+                {
+                  "key": "dryRun",
+                  "value": "true",
+                  "description": "true = แค่บอกว่าจะลบอะไร ไม่ลบจริง"
+                }
+              ]
+            },
+            "description": "🔴 Teardown: drop table itec_* ของปีนั้นทิ้ง (ไม่ใช่แค่ล้าง record). แนะนำยิง dryRun=true ก่อน."
+          }
+        },
+        {
+          "name": "GET /base/status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Lark-App-Id",
+                "value": "{{larkAppId}}"
+              },
+              {
+                "key": "X-Lark-App-Secret",
+                "value": "{{larkAppSecret}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/base/status?year={{year}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "base",
+                "status"
+              ],
+              "query": [
+                {
+                  "key": "year",
+                  "value": "{{year}}"
+                }
+              ]
+            },
+            "description": "สถานะ provision ของปี (อ่าน ops DB เท่านั้น ไม่ยิง Lark)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Full Sync",
+      "item": [
+        {
+          "name": "POST /sync/full",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Lark-App-Id",
+                "value": "{{larkAppId}}"
+              },
+              {
+                "key": "X-Lark-App-Secret",
+                "value": "{{larkAppSecret}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"year\": {{year}}\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/sync/full",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sync",
+                "full"
+              ]
+            },
+            "description": "Enqueue backfill ทั้งปี (async background job — ต้องมี worker รัน). Idempotent: ถ้ามี job active อยู่แล้วคืนตัวเดิม."
+          }
+        },
+        {
+          "name": "GET /sync/full/status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Lark-App-Id",
+                "value": "{{larkAppId}}"
+              },
+              {
+                "key": "X-Lark-App-Secret",
+                "value": "{{larkAppSecret}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/sync/full/status?year={{year}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sync",
+                "full",
+                "status"
+              ],
+              "query": [
+                {
+                  "key": "year",
+                  "value": "{{year}}"
+                }
+              ]
+            },
+            "description": "สถานะ/ความคืบหน้าของ backfill job."
+          }
+        },
+        {
+          "name": "GET /sync/full/check",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Lark-App-Id",
+                "value": "{{larkAppId}}"
+              },
+              {
+                "key": "X-Lark-App-Secret",
+                "value": "{{larkAppSecret}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/sync/full/check?year={{year}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sync",
+                "full",
+                "check"
+              ],
+              "query": [
+                {
+                  "key": "year",
+                  "value": "{{year}}"
+                }
+              ]
+            },
+            "description": "Reconcile L1 (count) / L2 (checksum) drift ต่อ partition โดยไม่ fetch record จาก Lark."
+          }
+        },
+        {
+          "name": "POST /sync/full/heal",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Lark-App-Id",
+                "value": "{{larkAppId}}"
+              },
+              {
+                "key": "X-Lark-App-Secret",
+                "value": "{{larkAppSecret}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"year\": {{year}}\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/sync/full/heal",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sync",
+                "full",
+                "heal"
+              ]
+            },
+            "description": "ซ่อม drift ที่ /check เจอ (create/update/delete เฉพาะจุด)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Incremental",
+      "item": [
+        {
+          "name": "POST /sync/incremental",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Lark-App-Id",
+                "value": "{{larkAppId}}"
+              },
+              {
+                "key": "X-Lark-App-Secret",
+                "value": "{{larkAppSecret}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/sync/incremental",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sync",
+                "incremental"
+              ]
+            },
+            "description": "กวาดข้อมูลใหม่/เปลี่ยน (UTime >= last watermark) แล้วเลื่อน watermark. ไม่ต้องส่ง body. sync — รอผลในคำขอเลย (ไม่ใช่ job)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Recovery",
+      "item": [
+        {
+          "name": "POST /sync/hard-full",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Lark-App-Id",
+                "value": "{{larkAppId}}"
+              },
+              {
+                "key": "X-Lark-App-Secret",
+                "value": "{{larkAppSecret}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"year\": {{year}},\n  \"confirm\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/sync/hard-full",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sync",
+                "hard-full"
+              ]
+            },
+            "description": "🔴 ทำลายข้อมูลจริง — ลบ record ทั้งหมดของปีบน Lark + เคลียร์ mapping/state แล้ว enqueue backfill ใหม่ (background job). ต้อง confirm: true เป๊ะ."
+          }
+        },
+        {
+          "name": "POST /sync/clear-partitions",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Lark-App-Id",
+                "value": "{{larkAppId}}"
+              },
+              {
+                "key": "X-Lark-App-Secret",
+                "value": "{{larkAppSecret}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"year\": {{year}},\n  \"confirm\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/sync/clear-partitions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sync",
+                "clear-partitions"
+              ]
+            },
+            "description": "🔴 ทำลายข้อมูลจริง — เหมือน hard-full แต่ไม่ enqueue backfill ต่อ (ปีจะว่างเปล่า). ต้อง confirm: true เป๊ะ."
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -20,5 +20,5 @@ export class Partition {
   }
 }
 
-/** Lark hard limit: 50K records per table (§3). */
-Partition.CAPACITY = 50000;
+/** Records per Lark table before rolling to the next partition (§3). */
+Partition.CAPACITY = 20000;

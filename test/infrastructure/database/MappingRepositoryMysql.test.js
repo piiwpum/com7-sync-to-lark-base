@@ -45,7 +45,7 @@ test('reserveSlots splits across two partitions when the first is nearly full', 
   const conn = fakeConnection((sql) => {
     if (sql.includes('SELECT')) {
       call++;
-      if (call === 1) return [[{ partition_no: 3, lark_table_id: 'tbl3', fill_count: 49980 }]]; // 20 left
+      if (call === 1) return [[{ partition_no: 3, lark_table_id: 'tbl3', fill_count: 19980 }]]; // 20 left
       return [[{ partition_no: 4, lark_table_id: 'tbl4', fill_count: 0 }]];
     }
     return [{}];
@@ -53,7 +53,7 @@ test('reserveSlots splits across two partitions when the first is nearly full', 
   const repo = createMappingRepository(fakePool(conn));
   const segments = await repo.reserveSlots({ year: 2024, count: 50 });
   assert.deepEqual(segments, [
-    { partitionNo: 3, larkTableId: 'tbl3', startIndex: 49980, count: 20 },
+    { partitionNo: 3, larkTableId: 'tbl3', startIndex: 19980, count: 20 },
     { partitionNo: 4, larkTableId: 'tbl4', startIndex: 0, count: 30 },
   ]);
   // Two segments means two full transactions on this (reused) connection:
@@ -206,7 +206,7 @@ test('getOpenPartition returns the lowest-numbered partition with spare capacity
   const open = await repo.getOpenPartition({ year: 2024 });
   assert.match(conn.calls[0].sql, /fill_count < \?/);
   assert.match(conn.calls[0].sql, /ORDER BY partition_no LIMIT 1/);
-  assert.deepEqual(conn.calls[0].params, [2024, 50000]);
+  assert.deepEqual(conn.calls[0].params, [2024, 20000]);
   assert.deepEqual(open, { partitionNo: 4, larkTableId: 'tbl4', fillCount: 12345 });
 });
 

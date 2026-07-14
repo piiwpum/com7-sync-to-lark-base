@@ -40,9 +40,10 @@ export class RunFullSyncJob {
     const { id, year, attempts, payload } = job;
     const { appId, appSecret } = payload;
     const scope = `full_sync:${year}`;
+    let baseId;
 
     try {
-      const { baseId } = await this.yearRepository.getYear(year);
+      ({ baseId } = await this.yearRepository.getYear(year));
 
       // Self-heal a phantom reservation from a previous crash before
       // reserving more on top of it: reserveSlots commits its fill_count
@@ -55,15 +56,7 @@ export class RunFullSyncJob {
       // matches). Only ever corrects fill_count DOWN to the real Lark
       // count — never up, since an excess-record case is a different
       // problem for GET /sync/full/check + POST /sync/full/heal to catch.
-      const openPartition = await this.mappingRepository.getOpenPartition({ year });
-      if (openPartition) {
-        const healToken = await this.tokenCache.getToken(appId, appSecret);
-        const healGateway = this.createGateway({ token: healToken, baseDomain: this.baseDomain });
-        const larkTotal = await healGateway.countRecords({ baseId, tableId: openPartition.larkTableId });
-        if (larkTotal < openPartition.fillCount) {
-          await this.mappingRepository.setFillCount({ year, partitionNo: openPartition.partitionNo, fillCount: larkTotal });
-        }
-      }
+      await this.healOpenPartition({ year, baseId, appId, appSecret });
 
       const state = await this.mappingRepository.getState(scope);
       let cursor = state?.checkpoint ?? null;
@@ -136,12 +129,39 @@ export class RunFullSyncJob {
     } catch (err) {
       if (attempts >= this.maxAttempts) {
         console.error(`[RunFullSyncJob] job ${id} attempt ${attempts}/${this.maxAttempts} -> dead:`, err);
+        // A dead job never executes again, so it never reaches the
+        // self-heal at the top of execute() — the last reservation this
+        // attempt made would otherwise sit over-counted forever (e.g. a
+        // partition capacity error mid-reserveSlots leaves fill_count
+        // ahead of what actually landed in Lark). Correct it now, on a
+        // best-effort basis: if Lark itself is unreachable here, don't let
+        // that block the dead transition — GET /sync/full/check + POST
+        // /sync/full/heal remain the fallback.
+        if (baseId) {
+          try {
+            await this.healOpenPartition({ year, baseId, appId, appSecret });
+          } catch (healErr) {
+            console.error(`[RunFullSyncJob] job ${id} heal-before-dead failed:`, healErr);
+          }
+        }
         await this.jobQueue.fail({ id, payload: { appId } });
       } else {
         console.error(`[RunFullSyncJob] job ${id} attempt ${attempts}/${this.maxAttempts} -> retry:`, err);
         await this.jobQueue.retry({ id, runAfter: new Date(this.now() + this.retryDelayMs) });
       }
       throw err;
+    }
+  }
+
+  /** Correct the open partition's fill_count down to Lark's real count, if ahead. See callers for when/why. */
+  async healOpenPartition({ year, baseId, appId, appSecret }) {
+    const openPartition = await this.mappingRepository.getOpenPartition({ year });
+    if (!openPartition) return;
+    const healToken = await this.tokenCache.getToken(appId, appSecret);
+    const healGateway = this.createGateway({ token: healToken, baseDomain: this.baseDomain });
+    const larkTotal = await healGateway.countRecords({ baseId, tableId: openPartition.larkTableId });
+    if (larkTotal < openPartition.fillCount) {
+      await this.mappingRepository.setFillCount({ year, partitionNo: openPartition.partitionNo, fillCount: larkTotal });
     }
   }
 }
